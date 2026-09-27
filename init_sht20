@@ -1,0 +1,486 @@
+#include <stdio.h>
+#include <string.h>
+#include <time.h>
+#include <sys/time.h>
+#include "freertos/FreeRTOS.h"
+#include "freertos/task.h"
+#include "freertos/event_groups.h"
+#include "esp_system.h"
+#include "esp_wifi.h"
+#include "esp_event.h"
+#include "esp_log.h"
+#include "esp_timer.h"
+#include "esp_netif_sntp.h"
+#include "esp_crt_bundle.h"
+#include "nvs_flash.h"
+#include "nvs.h"
+#include "driver/i2c_master.h"
+#include "driver/gpio.h"
+#include "esp_http_client.h"
+
+// =========================================================
+// STRINGS TABLE
+// =========================================================
+typedef struct { const char *key; const char *value; } str_entry_t;
+
+static const str_entry_t STRINGS[] = {
+    {"tag",          "SHT20_API"},
+    {"gist-url",     "https://raw.githubusercontent.com/syauqqii/responser/refs/heads/main/setter-api"},
+    {"cfg-key",      "api_sht20="},
+    {"info-boot",    "Boot | Profile: %s"},
+    {"info-wifi-ok", "WiFi connected, fetching API config..."},
+    {"info-fetch-ok","Fetch OK -> api_url: %s"},
+    {"info-switch",  ">>> Ganti Profile: %s (idx %d). Restarting..."},
+    {"info-cache",   "Pakai cache api_url: %s"},
+    {"err-wifi",     "WiFi connect gagal"},
+    {"err-fetch",    "Fetch gagal, fallback ke cache NVS"},
+    {"err-parse",    "Key api_sht20 tidak ditemukan di response"},
+    {"err-nocfg",    "Tidak ada api_url (fetch gagal & cache kosong). Retry di background..."},
+    {"err-post",     "POST gagal: %s"},
+    {"err-sntp",     "SNTP sync gagal/timeout"},
+};
+#define STRINGS_COUNT (sizeof(STRINGS) / sizeof(STRINGS[0]))
+
+static const char *S(const char *key)
+{
+    for (size_t i = 0; i < STRINGS_COUNT; i++) {
+        if (strcmp(STRINGS[i].key, key) == 0) return STRINGS[i].value;
+    }
+    return "?";
+}
+
+static const char *TAG;
+
+// =========================================================
+// KONFIGURASI MULTI-PROFILE
+// =========================================================
+typedef struct {
+    const char *name;
+    const char *ssid;
+    const char *pass;
+} net_config_t;
+
+static const net_config_t NET_CONFIGS[] = {
+    { .name = "SHT20-A", .ssid = "...", .pass = "..." },
+    { .name = "SHT20-B", .ssid = "...",  .pass = "..." },
+};
+#define NUM_CONFIGS (sizeof(NET_CONFIGS) / sizeof(NET_CONFIGS[0]))
+
+static net_config_t s_active_cfg;
+static char s_api_url[192] = {0};
+
+// =========================================================
+// I2C SHT20 / TOMBOL
+// =========================================================
+#define I2C_MASTER_SDA_IO               33
+#define I2C_MASTER_SCL_IO               25
+#define I2C_MASTER_FREQ_HZ              100000
+#define SHT20_I2C_ADDR                  0x40
+#define SHT20_CMD_TRIGGER_TEMP_NOHOLD   0xF3
+#define SHT20_CMD_TRIGGER_RH_NOHOLD     0xF5
+
+#define BOOT_BUTTON_GPIO     GPIO_NUM_0
+#define DEBOUNCE_US          300000
+#define STATUS_LED_GPIO      GPIO_NUM_2
+
+static i2c_master_dev_handle_t sht20_handle;
+static EventGroupHandle_t s_wifi_event_group;
+#define WIFI_CONNECTED_BIT BIT0
+
+static volatile int64_t s_last_isr_time = 0;
+static QueueHandle_t s_button_evt_queue = NULL;
+
+// ---------------------------------------------------------
+// NVS
+// ---------------------------------------------------------
+static uint8_t nvs_get_cfg_idx(void)
+{
+    nvs_handle_t handle;
+    uint8_t idx = 0;
+    if (nvs_open("storage", NVS_READONLY, &handle) == ESP_OK) {
+        nvs_get_u8(handle, "cfg_idx", &idx);
+        nvs_close(handle);
+    }
+    if (idx >= NUM_CONFIGS) idx = 0;
+    return idx;
+}
+
+static void nvs_set_cfg_idx(uint8_t idx)
+{
+    nvs_handle_t handle;
+    if (nvs_open("storage", NVS_READWRITE, &handle) == ESP_OK) {
+        nvs_set_u8(handle, "cfg_idx", idx);
+        nvs_commit(handle);
+        nvs_close(handle);
+    }
+}
+
+static bool nvs_get_api_url_cache(char *out, size_t out_len)
+{
+    nvs_handle_t handle;
+    bool ok = false;
+    if (nvs_open("storage", NVS_READONLY, &handle) == ESP_OK) {
+        size_t len = out_len;
+        if (nvs_get_str(handle, "api_url", out, &len) == ESP_OK) ok = true;
+        nvs_close(handle);
+    }
+    return ok;
+}
+
+static void nvs_set_api_url_cache(const char *url)
+{
+    nvs_handle_t handle;
+    if (nvs_open("storage", NVS_READWRITE, &handle) == ESP_OK) {
+        nvs_set_str(handle, "api_url", url);
+        nvs_commit(handle);
+        nvs_close(handle);
+    }
+}
+
+// ---------------------------------------------------------
+// Tombol BOOT -> ganti wifi profile -> restart
+// ---------------------------------------------------------
+static void IRAM_ATTR boot_button_isr_handler(void *arg)
+{
+    int64_t now = esp_timer_get_time();
+    if (now - s_last_isr_time > DEBOUNCE_US) {
+        s_last_isr_time = now;
+        uint32_t dummy = 1;
+        xQueueSendFromISR(s_button_evt_queue, &dummy, NULL);
+    }
+}
+
+static void status_led_blink(int times)
+{
+    for (int i = 0; i < times; i++) {
+        gpio_set_level(STATUS_LED_GPIO, 1);
+        vTaskDelay(pdMS_TO_TICKS(150));
+        gpio_set_level(STATUS_LED_GPIO, 0);
+        vTaskDelay(pdMS_TO_TICKS(150));
+    }
+}
+
+static void button_task(void *arg)
+{
+    uint32_t dummy;
+    while (1) {
+        if (xQueueReceive(s_button_evt_queue, &dummy, portMAX_DELAY)) {
+            uint8_t idx = nvs_get_cfg_idx();
+            idx = (idx + 1) % NUM_CONFIGS;
+            nvs_set_cfg_idx(idx);
+            ESP_LOGW(TAG, S("info-switch"), NET_CONFIGS[idx].name, idx);
+            status_led_blink(idx + 1);
+            vTaskDelay(pdMS_TO_TICKS(300));
+            esp_restart();
+        }
+    }
+}
+
+static void button_init(void)
+{
+    gpio_config_t io_conf = {
+        .pin_bit_mask = (1ULL << BOOT_BUTTON_GPIO),
+        .mode = GPIO_MODE_INPUT,
+        .pull_up_en = GPIO_PULLUP_ENABLE,
+        .pull_down_en = GPIO_PULLDOWN_DISABLE,
+        .intr_type = GPIO_INTR_NEGEDGE,
+    };
+    gpio_config(&io_conf);
+
+    gpio_config_t led_conf = {
+        .pin_bit_mask = (1ULL << STATUS_LED_GPIO),
+        .mode = GPIO_MODE_OUTPUT,
+    };
+    gpio_config(&led_conf);
+
+    s_button_evt_queue = xQueueCreate(5, sizeof(uint32_t));
+    gpio_install_isr_service(0);
+    gpio_isr_handler_add(BOOT_BUTTON_GPIO, boot_button_isr_handler, NULL);
+
+    xTaskCreate(button_task, "button_task", 4096, NULL, 10, NULL);
+}
+
+// ---------------------------------------------------------
+// Wi-Fi
+// ---------------------------------------------------------
+static void wifi_event_handler(void* arg, esp_event_base_t event_base, int32_t event_id, void* event_data)
+{
+    if (event_base == WIFI_EVENT && event_id == WIFI_EVENT_STA_START) {
+        esp_wifi_connect();
+    } else if (event_base == WIFI_EVENT && event_id == WIFI_EVENT_STA_DISCONNECTED) {
+        esp_wifi_connect();
+    } else if (event_base == IP_EVENT && event_id == IP_EVENT_STA_GOT_IP) {
+        xEventGroupSetBits(s_wifi_event_group, WIFI_CONNECTED_BIT);
+    }
+}
+
+static void wifi_init_sta(void)
+{
+    s_wifi_event_group = xEventGroupCreate();
+    ESP_ERROR_CHECK(esp_netif_init());
+    ESP_ERROR_CHECK(esp_event_loop_create_default());
+    esp_netif_create_default_wifi_sta();
+
+    wifi_init_config_t cfg = WIFI_INIT_CONFIG_DEFAULT();
+    ESP_ERROR_CHECK(esp_wifi_init(&cfg));
+
+    esp_event_handler_instance_t instance_any_id, instance_got_ip;
+    ESP_ERROR_CHECK(esp_event_handler_instance_register(WIFI_EVENT, ESP_EVENT_ANY_ID, &wifi_event_handler, NULL, &instance_any_id));
+    ESP_ERROR_CHECK(esp_event_handler_instance_register(IP_EVENT, IP_EVENT_STA_GOT_IP, &wifi_event_handler, NULL, &instance_got_ip));
+
+    wifi_config_t wifi_config = { 0 };
+    strncpy((char *)wifi_config.sta.ssid, s_active_cfg.ssid, sizeof(wifi_config.sta.ssid) - 1);
+    strncpy((char *)wifi_config.sta.password, s_active_cfg.pass, sizeof(wifi_config.sta.password) - 1);
+
+    ESP_ERROR_CHECK(esp_wifi_set_mode(WIFI_MODE_STA));
+    ESP_ERROR_CHECK(esp_wifi_set_config(WIFI_IF_STA, &wifi_config));
+    ESP_ERROR_CHECK(esp_wifi_start());
+}
+
+// ambil RSSI live dari AP yang lagi connect
+static int wifi_get_rssi(void)
+{
+    wifi_ap_record_t ap_info;
+    if (esp_wifi_sta_get_ap_info(&ap_info) == ESP_OK) {
+        return ap_info.rssi;
+    }
+    return 0;
+}
+
+// ---------------------------------------------------------
+// SNTP
+// ---------------------------------------------------------
+static void time_sync_init(void)
+{
+    setenv("TZ", "WIB-7", 1);
+    tzset();
+
+    esp_sntp_config_t config = ESP_NETIF_SNTP_DEFAULT_CONFIG("pool.ntp.org");
+    esp_netif_sntp_init(&config);
+
+    if (esp_netif_sntp_sync_wait(pdMS_TO_TICKS(10000)) != ESP_OK) {
+        ESP_LOGE(TAG, "%s", S("err-sntp"));
+    }
+}
+
+static void get_iso_timestamp(char *buf, size_t buf_len)
+{
+    time_t now;
+    struct tm timeinfo;
+    time(&now);
+    localtime_r(&now, &timeinfo);
+    strftime(buf, buf_len, "%Y-%m-%dT%H:%M:%S+07:00", &timeinfo);
+}
+
+// ---------------------------------------------------------
+// FETCH API CONFIG Dari GIT
+// Ekspektasi isi: api_sht20=http://192.168.1.10:8080/v1/telemetry
+// ---------------------------------------------------------
+typedef struct {
+    char *buf;
+    size_t len;
+    size_t cap;
+} http_resp_buf_t;
+
+static esp_err_t gist_http_event_handler(esp_http_client_event_t *evt)
+{
+    http_resp_buf_t *resp = (http_resp_buf_t *)evt->user_data;
+    if (evt->event_id == HTTP_EVENT_ON_DATA && !esp_http_client_is_chunked_response(evt->client)) {
+        size_t remain = resp->cap - resp->len - 1;
+        size_t copy_len = evt->data_len < remain ? evt->data_len : remain;
+        if (copy_len > 0) {
+            memcpy(resp->buf + resp->len, evt->data, copy_len);
+            resp->len += copy_len;
+            resp->buf[resp->len] = '\0';
+        }
+    }
+    return ESP_OK;
+}
+
+static bool fetch_api_url_from_gist(char *out_url, size_t out_len)
+{
+    char resp_data[512] = {0};
+    http_resp_buf_t resp = { .buf = resp_data, .len = 0, .cap = sizeof(resp_data) };
+
+    esp_http_client_config_t config = {
+        .url = S("gist-url"),
+        .method = HTTP_METHOD_GET,
+        .timeout_ms = 8000,
+        .crt_bundle_attach = esp_crt_bundle_attach,
+        .event_handler = gist_http_event_handler,
+        .user_data = &resp,
+    };
+
+    esp_http_client_handle_t client = esp_http_client_init(&config);
+    esp_err_t err = esp_http_client_perform(client);
+    int status = esp_http_client_get_status_code(client);
+    esp_http_client_cleanup(client);
+
+    if (err != ESP_OK || status != 200) {
+        ESP_LOGE(TAG, "%s", S("err-fetch"));
+        return false;
+    }
+
+    // Cari baris "api_sht20=..." lalu ambil value-nya
+    const char *key = S("cfg-key");           // "api_sht20="
+    char *pos = strstr(resp.buf, key);
+    if (!pos) {
+        ESP_LOGE(TAG, "%s", S("err-parse"));
+        return false;
+    }
+
+    pos += strlen(key);                       // geser ke awal value
+    char *end = pos;
+    while (*end && *end != '\n' && *end != '\r' && *end != ' ') end++; // stop di newline/spasi
+
+    size_t val_len = (size_t)(end - pos);
+    if (val_len == 0 || val_len >= out_len) {
+        ESP_LOGE(TAG, "%s", S("err-parse"));
+        return false;
+    }
+
+    memcpy(out_url, pos, val_len);
+    out_url[val_len] = '\0';
+
+    nvs_set_api_url_cache(out_url);
+    return true;
+}
+
+static void resolve_api_url(void)
+{
+    ESP_LOGI(TAG, "%s", S("info-wifi-ok"));
+
+    if (fetch_api_url_from_gist(s_api_url, sizeof(s_api_url))) {
+        ESP_LOGI(TAG, S("info-fetch-ok"), s_api_url);
+        return;
+    }
+
+    if (nvs_get_api_url_cache(s_api_url, sizeof(s_api_url))) {
+        ESP_LOGW(TAG, S("info-cache"), s_api_url);
+        return;
+    }
+
+    ESP_LOGE(TAG, "%s", S("err-nocfg"));
+    while (!fetch_api_url_from_gist(s_api_url, sizeof(s_api_url))) {
+        status_led_blink(1);
+        vTaskDelay(pdMS_TO_TICKS(5000));
+    }
+    ESP_LOGI(TAG, S("info-fetch-ok"), s_api_url);
+}
+
+// ---------------------------------------------------------
+// I2C SHT20
+// ---------------------------------------------------------
+static void i2c_master_init(void)
+{
+    i2c_master_bus_config_t i2c_bus_config = {
+        .clk_source = I2C_CLK_SRC_DEFAULT,
+        .i2c_port = I2C_NUM_0,
+        .scl_io_num = I2C_MASTER_SCL_IO,
+        .sda_io_num = I2C_MASTER_SDA_IO,
+        .glitch_ignore_cnt = 7,
+        .flags.enable_internal_pullup = true,
+    };
+
+    i2c_master_bus_handle_t bus_handle;
+    ESP_ERROR_CHECK(i2c_new_master_bus(&i2c_bus_config, &bus_handle));
+
+    i2c_device_config_t dev_config = {
+        .dev_addr_length = I2C_ADDR_BIT_LEN_7,
+        .device_address = SHT20_I2C_ADDR,
+        .scl_speed_hz = I2C_MASTER_FREQ_HZ,
+    };
+
+    ESP_ERROR_CHECK(i2c_master_bus_add_device(bus_handle, &dev_config, &sht20_handle));
+}
+
+static float sht20_read_temperature(void)
+{
+    uint8_t cmd = SHT20_CMD_TRIGGER_TEMP_NOHOLD;
+    uint8_t data[3] = {0};
+    ESP_ERROR_CHECK(i2c_master_transmit(sht20_handle, &cmd, 1, pdMS_TO_TICKS(100)));
+    vTaskDelay(pdMS_TO_TICKS(100));
+    ESP_ERROR_CHECK(i2c_master_receive(sht20_handle, data, 3, pdMS_TO_TICKS(100)));
+    uint16_t raw_temp = (data[0] << 8) | (data[1] & 0xFC);
+    return -46.85f + 175.72f * ((float)raw_temp / 65536.0f);
+}
+
+static float sht20_read_humidity(void)
+{
+    uint8_t cmd = SHT20_CMD_TRIGGER_RH_NOHOLD;
+    uint8_t data[3] = {0};
+    ESP_ERROR_CHECK(i2c_master_transmit(sht20_handle, &cmd, 1, pdMS_TO_TICKS(100)));
+    vTaskDelay(pdMS_TO_TICKS(50));
+    ESP_ERROR_CHECK(i2c_master_receive(sht20_handle, data, 3, pdMS_TO_TICKS(100)));
+    uint16_t raw_rh = (data[0] << 8) | (data[1] & 0xFC);
+    return -6.0f + 125.0f * ((float)raw_rh / 65536.0f);
+}
+
+// ---------------------------------------------------------
+// HTTP POST -> backend (api_url dinamis, payload lengkap dgn health metrics)
+// ---------------------------------------------------------
+static void send_data_to_api(const char *timestamp, float temp, float humidity)
+{
+    char post_data[320];
+    snprintf(post_data, sizeof(post_data),
+             "{\"timestamp\":\"%s\",\"temperature\":%.2f,\"humidity\":%.2f,"
+             "\"device\":\"%s\",\"ssid\":\"%s\",\"rssi\":%d,"
+             "\"free_heap\":%lu,\"uptime_s\":%lld}",
+             timestamp, temp, humidity,
+             s_active_cfg.name, s_active_cfg.ssid, wifi_get_rssi(),
+             (unsigned long)esp_get_free_heap_size(),
+             (long long)(esp_timer_get_time() / 1000000));
+
+    esp_http_client_config_t config = {
+        .url = s_api_url,
+        .method = HTTP_METHOD_POST,
+        .timeout_ms = 5000,
+        .crt_bundle_attach = esp_crt_bundle_attach,
+    };
+    esp_http_client_handle_t client = esp_http_client_init(&config);
+    esp_http_client_set_header(client, "Content-Type", "application/json");
+    esp_http_client_set_post_field(client, post_data, strlen(post_data));
+
+    esp_err_t err = esp_http_client_perform(client);
+    if (err != ESP_OK) {
+        ESP_LOGE(TAG, S("err-post"), esp_err_to_name(err));
+    }
+    esp_http_client_cleanup(client);
+}
+
+void app_main(void)
+{
+    TAG = S("tag");
+
+    esp_err_t ret = nvs_flash_init();
+    if (ret == ESP_ERR_NVS_NO_FREE_PAGES || ret == ESP_ERR_NVS_NEW_VERSION_FOUND) {
+        ESP_ERROR_CHECK(nvs_flash_erase());
+        ret = nvs_flash_init();
+    }
+    ESP_ERROR_CHECK(ret);
+
+    uint8_t idx = nvs_get_cfg_idx();
+    s_active_cfg = NET_CONFIGS[idx];
+    ESP_LOGW(TAG, S("info-boot"), s_active_cfg.name);
+
+    button_init();
+    i2c_master_init();
+    wifi_init_sta();
+    status_led_blink(idx + 1);
+
+    xEventGroupWaitBits(s_wifi_event_group, WIFI_CONNECTED_BIT, pdFALSE, pdTRUE, portMAX_DELAY);
+    time_sync_init();
+
+    resolve_api_url();
+
+    char ts[32];
+    while (1) {
+        float temp = sht20_read_temperature();
+        float humidity = sht20_read_humidity();
+        get_iso_timestamp(ts, sizeof(ts));
+
+        send_data_to_api(ts, temp, humidity);
+
+        vTaskDelay(pdMS_TO_TICKS(5000));
+    }
+}
