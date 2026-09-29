@@ -1,4 +1,4 @@
--- Auto Merge v12
+-- Auto Merge v13
 local env = getgenv()
 local RS  = game:GetService("ReplicatedStorage")
 local CS  = game:GetService("CollectionService")
@@ -19,12 +19,12 @@ env.AM_IDSKIP = {}
 local root = LP:WaitForChild("PlayerGui")
 pcall(function() if gethui then root = gethui() end end)
 for _, p in ipairs({ root, LP.PlayerGui }) do
-	for _, n in ipairs({ "AM12", "AM11", "AM10", "AM9", "AM8", "AM7", "AM6", "AM5", "AM4", "AM3", "AM2", "Rec", "Probe", "SrcScan", "SimpleSpy", "AutoMergeHUD", "MergeSpyHUD" }) do
+	for _, n in ipairs({ "AM13", "AM12", "AM11", "AM10", "AM9", "AM8", "AM7", "AM6", "AM5", "AM4", "AM3", "AM2", "Rec", "Probe", "SrcScan", "SimpleSpy", "AutoMergeHUD", "MergeSpyHUD" }) do
 		pcall(function() p[n]:Destroy() end)
 	end
 end
 local gui = Instance.new("ScreenGui")
-gui.Name, gui.ResetOnSpawn, gui.DisplayOrder = "AM12", false, 999
+gui.Name, gui.ResetOnSpawn, gui.DisplayOrder = "AM13", false, 999
 gui.Parent = root
 
 local win = Instance.new("Frame")
@@ -43,7 +43,7 @@ bar.TextColor3 = Color3.new(1, 1, 1)
 bar.Font = Enum.Font.GothamBold
 bar.TextSize = 13
 bar.TextXAlignment = Enum.TextXAlignment.Left
-bar.Text = "  Auto Merge v12 (geser di sini)"
+bar.Text = "  Auto Merge v13 (geser di sini)"
 bar.Parent = win
 Instance.new("UICorner", bar).CornerRadius = UDim.new(0, 8)
 
@@ -82,8 +82,8 @@ status.Text = "siap"
 status.Parent = win
 
 local scroll = Instance.new("ScrollingFrame")
-scroll.Position = UDim2.new(0, 4, 0, 124)
-scroll.Size = UDim2.new(1, -8, 1, -128)
+scroll.Position = UDim2.new(0, 4, 0, 154)
+scroll.Size = UDim2.new(1, -8, 1, -158)
 scroll.BackgroundColor3 = Color3.fromRGB(10, 10, 14)
 scroll.BorderSizePixel = 0
 scroll.ScrollBarThickness = 4
@@ -111,7 +111,7 @@ out.Parent = scroll
 local lines, dirtyLog = {}, false
 local function say(s)
 	lines[#lines + 1] = os.date("%H:%M:%S ") .. tostring(s)
-	if #lines > 200 then table.remove(lines, 1) end
+	if #lines > 500 then table.remove(lines, 1) end
 	dirtyLog = true
 end
 local function L(v, s) if v then say(s) end end
@@ -129,11 +129,13 @@ end)
 -- ===== status =====
 local busy, step, stepT = false, "siap", os.clock()
 local total, wrong, drops = 0, 0, 0
+local mode, verbose, fullFail = "walk", true, 0
+local MODENAME = { walk = "JALAN", tele = "TELE", full = "FULL" }
 local function setStep(s) step, stepT = s, os.clock() end
 task.spawn(function()
 	while gui.Parent and env.AM_GEN == gen do
 		if busy then
-			status.Text = ("%s (%.0fs) | merged:%d salah:%d drop:%d"):format(step, os.clock() - stepT, total, wrong, drops)
+			status.Text = ("[%s] %s (%.0fs) | merged:%d salah:%d drop:%d"):format(MODENAME[mode], step, os.clock() - stepT, total, wrong, drops)
 		end
 		task.wait(0.5)
 	end
@@ -229,6 +231,41 @@ local function cleanStale()
 	P(function() BU:ClearAllCarryVisualState(ch) end)
 	P(function() BU:RequestSyncPlotUnits(LP) end)
 end
+
+-- ===== log gerakan =====
+local modeBtn
+local goal
+local function mv(s) if verbose then say(s) end end
+local function fmt(v) return v and ("(%.0f,%.0f,%.0f)"):format(v.X, v.Y, v.Z) or "nil" end
+local function argstr(t)
+	local a = {}
+	for i = 1, (t.n or #t) do a[i] = tostring(t[i]) end
+	return table.concat(a, " , ")
+end
+local function setMode(m)
+	mode, fullFail = m, 0
+	if modeBtn then modeBtn.Text = "Mode: " .. MODENAME[m] end
+	say("MODE -> " .. MODENAME[m])
+end
+-- pencatat posisi/kecepatan/tujuan tiap 1.5 detik saat berjalan
+task.spawn(function()
+	local lp, lt
+	while gui.Parent and env.AM_GEN == gen do
+		task.wait(1.5)
+		if busy and verbose then
+			local r = hrpOf()
+			if r then
+				local sp = lp and (r.Position - lp).Magnitude / math.max(os.clock() - lt, 0.1) or 0
+				lp, lt = r.Position, os.clock()
+				local g = goal and (" -> %s d=%.1f"):format(goal.name, xz(r.Position, goal.pos)) or ""
+				local c = carryAttr()
+				say(("  [pos %s v=%.0f] %s%s | bawa=%s"):format(fmt(r.Position), sp, step, g, c and short(c) or "-"))
+			end
+		else
+			lp = nil
+		end
+	end
+end)
 
 local function unitCount()
 	local n = P(function() return BU:GetPlotUnitCount(LP) end)
@@ -396,30 +433,56 @@ local function rankText(ranks)
 end
 
 -- ===== jalan kaki =====
-local function walkTo(pos, stopDist, timeout, abort, my)
+local function walkTo(pos, stopDist, timeout, abort, my, tag)
 	local t0 = os.clock()
 	local lastP, lastT
+	tag = tag or "titik"
+	goal = { name = tag, pos = pos }
+	local r0 = hrpOf()
+	mv(("  JALAN %s -> %s jarak=%.1f"):format(tag, fmt(pos), r0 and xz(r0.Position, pos) or -1))
+	local function fin(res, why)
+		local r = hrpOf()
+		mv(("  JALAN selesai: %s %.1fs sisa=%.1f"):format(why, os.clock() - t0, r and xz(r.Position, pos) or -1))
+		return res
+	end
 	while os.clock() - t0 < timeout do
-		if not live(my) then return false end
-		if abort and abort() then return true end
+		if not live(my) then return fin(false, "dibatalkan") end
+		if abort and abort() then return fin(true, "kondisi tercapai") end
 		local h, r = humOf(), hrpOf()
-		if not (h and r and h.Health > 0) then return false end
+		if not (h and r and h.Health > 0) then return fin(false, "karakter hilang") end
 		local flat = Vector3.new(pos.X - r.Position.X, 0, pos.Z - r.Position.Z).Magnitude
-		if flat <= stopDist then return true end
+		if flat <= stopDist then return fin(true, "sampai") end
 		h:MoveTo(Vector3.new(pos.X, r.Position.Y, pos.Z))
 		if not lastP or (r.Position - lastP).Magnitude > 0.8 then
 			lastP, lastT = r.Position, os.clock()
 		elseif os.clock() - lastT > 1.2 then
 			h.Jump = true
 			lastT = os.clock()
+			mv("    lompat (tersangkut)")
 		end
 		task.wait(0.1)
 	end
-	return false
+	return fin(false, "timeout")
+end
+
+-- teleport karakter (hadap ke lookAt), lalu sisanya jalan kaki
+local function teleportTo(pos, lookAt, why)
+	local r = hrpOf()
+	if not r then return false end
+	local from = r.Position
+	local p = Vector3.new(pos.X, from.Y, pos.Z)
+	local look = Vector3.new(lookAt.X, p.Y, lookAt.Z)
+	if (look - p).Magnitude < 0.1 then look = p + r.CFrame.LookVector end
+	r.CFrame = CFrame.lookAt(p, look)
+	P(function() r.AssemblyLinearVelocity = Vector3.new(0, 0, 0) end)
+	goal = { name = "tele", pos = p }
+	mv(("  TELE %s: %s -> %s (%.1f stud) hadap %s"):format(why, fmt(from), fmt(p), (from - p).Magnitude, fmt(lookAt)))
+	task.wait(0.05)
+	return true
 end
 
 -- ===== jalur yang menghindari unit lain =====
-local CLEAR = 2.0
+local CLEAR = 2.6
 
 local function hitInfo(m)
 	local hb = P(function() return BU:GetMergeHitbox(m) end)
@@ -430,10 +493,10 @@ local function hitInfo(m)
 	return m:GetPivot().Position, radiusOf(m)
 end
 
-local function obstaclesFor(except)
+local function obstaclesFor(except, except2)
 	local res = {}
 	for _, m in ipairs((plotModels())) do
-		if m ~= except then
+		if m ~= except and m ~= except2 then
 			local pos, r = hitInfo(m)
 			res[#res + 1] = { p = Vector3.new(pos.X, 0, pos.Z), r = r + CLEAR }
 		end
@@ -494,9 +557,9 @@ local function planPath(from, to, obs)
 	return pts
 end
 
-local function walkPath(pts, timeoutPer, abort, my)
+local function walkPath(pts, timeoutPer, abort, my, tag)
 	for i, p in ipairs(pts) do
-		walkTo(p, (i == #pts) and 0.8 or 1.2, timeoutPer, abort, my)
+		walkTo(p, (i == #pts) and 0.8 or 1.2, timeoutPer, abort, my, ("%s %d/%d"):format(tag or "jalur", i, #pts))
 		if abort and abort() then return true end
 		if not live(my) then return false end
 	end
@@ -515,27 +578,99 @@ local function pickUp(m, my, v)
 		if not r then return end
 		local pts = planPath(r.Position, pos, obstaclesFor(m))
 		L(v, ("  jalur: %d titik"):format(#pts))
-		walkPath(pts, 10, got, my)
+		walkPath(pts, 10, got, my, "unit " .. short(key))
 	end
 	approach()
 	local tries = 0
 	while not got() and tries < 3 and live(my) do
 		tries = tries + 1
-		L(v, "  belum terambil, mundur lalu masuk lagi " .. tries)
+		mv("  belum terambil, mundur lalu masuk lagi " .. tries)
 		local r = hrpOf()
 		if r then
 			local dir = Vector3.new(r.Position.X - pos.X, 0, r.Position.Z - pos.Z)
 			dir = dir.Magnitude > 0.1 and dir.Unit or Vector3.new(0, 0, 1)
-			walkTo(pos + dir * 4, 1.2, 3, got, my)
+			walkTo(pos + dir * 4, 1.2, 2, got, my, "mundur")
 		end
 		approach()
-		task.wait(0.1)
+		task.wait(0.05)
 	end
 	for _ = 1, 10 do
 		if carried() then break end
 		task.wait(0.1)
 	end
 	return carried()
+end
+
+-- titik berdiri di sekitar target yang tidak menyentuh hitbox unit lain
+local OFFS = { 0, 45, -45, 90, -90, 135, -135, 180 }
+local function standPoint(tpos, dist, ex1, ex2, variant)
+	local r = hrpOf()
+	local base = r and Vector3.new(r.Position.X - tpos.X, 0, r.Position.Z - tpos.Z) or Vector3.new(0, 0, 1)
+	base = base.Magnitude > 0.1 and base.Unit or Vector3.new(0, 0, 1)
+	local obs = {}
+	for _, m in ipairs((plotModels())) do
+		if m ~= ex1 and m ~= ex2 then
+			local p, rr = hitInfo(m)
+			obs[#obs + 1] = { p = Vector3.new(p.X, 0, p.Z), r = rr + 0.8 }
+		end
+	end
+	local t3 = Vector3.new(tpos.X, 0, tpos.Z)
+	local best, bestPen
+	for i = 0, 7 do
+		local ang = math.rad(OFFS[((variant or 0) * 2 + i) % 8 + 1])
+		local cs, sn = math.cos(ang), math.sin(ang)
+		local dir = Vector3.new(base.X * cs - base.Z * sn, 0, base.X * sn + base.Z * cs)
+		local c = t3 + dir * dist
+		local pen = 0
+		for _, o in ipairs(obs) do
+			if (o.p - c).Magnitude < o.r then pen = pen + 100 end
+			local _, dd = segHit(c, t3, o)
+			if dd < o.r and (o.p - t3).Magnitude > o.r then pen = pen + 10 end
+		end
+		if not bestPen or pen < bestPen then best, bestPen = c, pen end
+		if pen == 0 then break end
+	end
+	return Vector3.new(best.X, r and r.Position.Y or tpos.Y, best.Z), bestPen
+end
+
+-- MODE TELE: teleport ke sebelah unit A, jalan kaki sedikit sampai terambil
+local function telePickup(m, my, v)
+	local key = m:GetAttribute("BrainrotKey")
+	local pos = m:GetPivot().Position
+	local function got() return carryAttr() ~= nil end
+	local _, tr = hitInfo(m)
+	for try = 0, 2 do
+		if not live(my) or got() then break end
+		setStep(("tele ke %s #%d"):format(short(key), try + 1))
+		local sp, pen = standPoint(pos, math.max(tr + 1.2, 3.5), m, nil, try)
+		teleportTo(sp, pos, ("ambil %s (id=%s) pen=%d"):format(short(key), tostring(m:GetAttribute("BrainrotId")), pen or 0))
+		walkTo(pos, 0.8, 2.5, got, my, "unit " .. short(key))
+	end
+	for _ = 1, 8 do
+		if carried() then break end
+		task.wait(0.1)
+	end
+	return carried()
+end
+
+-- MODE FULL: tanpa gerak sama sekali, langsung remote PickUpPlot
+local function fullPickup(m, my, v)
+	local key = m:GetAttribute("BrainrotKey")
+	setStep("FULL ambil " .. short(key))
+	local res = table.pack(invoke(4, "PickUpPlot", key))
+	mv(("  REMOTE PickUpPlot(%s) -> %s"):format(short(key), argstr(res)))
+	for _ = 1, 15 do
+		if carryAttr() then break end
+		task.wait(0.1)
+	end
+	if not carryAttr() then return nil end
+	for _ = 1, 12 do
+		local c = carried()
+		if c then return c end
+		task.wait(0.1)
+	end
+	mv("  atribut ada tapi model bawaan tidak ada, pakai model unit asli")
+	return m
 end
 
 -- 2) target = unit sejenis yang benar-benar bisa di-merge (CanMerge=true), terdekat
@@ -592,6 +727,7 @@ local function goMerge(cm, ckey, cid, my, v)
 	local target, noTargetSince
 	local t0, lastPick = os.clock(), 0
 	local inRangeSince, turns = nil, 0
+	local teleFor, forceTele = nil, false
 	setStep("cari target sejenis")
 	while os.clock() - t0 < 20 do
 		if not live(my) then return finish(false, "dibatalkan") end
@@ -620,24 +756,35 @@ local function goMerge(cm, ckey, cid, my, v)
 			local f = frontPos()
 			local d = f and xz(f, pr) or 99
 			local R = radiusOf(cm) + radiusOf(target)
+			if mode == "tele" and ((teleFor ~= target and d > R + 1.5) or forceTele) then
+				teleFor, forceTele = target, false
+				local sp, pen = standPoint(pr, R + 1.5, target, cm, turns)
+				teleportTo(sp, pr, ("ke target %s pen=%d"):format(short(target:GetAttribute("BrainrotKey")), pen or 0))
+				f = frontPos()
+				d = f and xz(f, pr) or 99
+			end
 			local h = humOf()
 			if not h then return finish(false, "tidak ada humanoid") end
 			local hr = hrpOf()
 			local y = hr and hr.Position.Y or pr.Y
 			if d <= R then
 				inRangeSince = inRangeSince or os.clock()
-				if os.clock() - inRangeSince > 1.2 then
+				if os.clock() - inRangeSince > 0.6 then
 					turns = turns + 1
 					local tk = target:GetAttribute("BrainrotKey")
 					say(("  dekat tapi belum merge (d=%.1f R=%.1f canMerge=%s), mundur lalu masuk lagi #%d"):format(
 						d, R, tostring(canMergeKeys(ckey, tk)), turns))
-					if turns >= 5 then return finish(false, "sentuhan tidak memicu merge") end
-					local dir = f and Vector3.new(f.X - pr.X, 0, f.Z - pr.Z) or Vector3.new(0, 0, 1)
-					dir = dir.Magnitude > 0.1 and dir.Unit or Vector3.new(0, 0, 1)
-					local ang = ((turns % 2 == 1) and 1 or -1) * math.rad(35 * math.ceil(turns / 2))
-					local cs, sn = math.cos(ang), math.sin(ang)
-					local rot = Vector3.new(dir.X * cs - dir.Z * sn, 0, dir.X * sn + dir.Z * cs)
-					walkTo(pr + rot * (R + 4), 1, 3, function() return carryAttr() == nil end, my)
+					if turns >= 6 then return finish(false, "sentuhan tidak memicu merge") end
+					if mode == "tele" then
+						forceTele = true
+					else
+						local dir = f and Vector3.new(f.X - pr.X, 0, f.Z - pr.Z) or Vector3.new(0, 0, 1)
+						dir = dir.Magnitude > 0.1 and dir.Unit or Vector3.new(0, 0, 1)
+						local ang = ((turns % 2 == 1) and 1 or -1) * math.rad(35 * math.ceil(turns / 2))
+						local cs, sn = math.cos(ang), math.sin(ang)
+						local rot = Vector3.new(dir.X * cs - dir.Z * sn, 0, dir.X * sn + dir.Z * cs)
+						walkTo(pr + rot * (R + 3), 1, 2, function() return carryAttr() == nil end, my, "mundur")
+					end
 					inRangeSince = nil
 				else
 					h:MoveTo(Vector3.new(pr.X, y, pr.Z))
@@ -650,6 +797,42 @@ local function goMerge(cm, ckey, cid, my, v)
 		task.wait(0.1)
 	end
 	return finish(carryAttr() == nil, "timeout 20 detik")
+end
+
+-- MODE FULL: langsung remote MergePlot(unit dibawa, unit sejenis), tanpa gerak
+local function fullMerge(cm, ckey, cid, my, v)
+	local function fin(ok, why) return ok, {}, {}, why end
+	setStep("FULL merge " .. short(ckey))
+	local tried = {}
+	for _ = 1, 3 do
+		if not live(my) then return fin(false, "dibatalkan") end
+		if carryAttr() == nil then return fin(true) end
+		local tgt, anySame
+		local t0 = os.clock()
+		repeat
+			tgt = nil
+			for _, m in ipairs((plotModels())) do
+				local k = m:GetAttribute("BrainrotKey")
+				if m ~= cm and k ~= ckey and not tried[k] and m:GetAttribute("BrainrotId") == cid then
+					anySame = true
+					if canMergeKeys(ckey, k) then tgt = m break end
+				end
+			end
+			if not tgt then task.wait(0.15) end
+		until tgt or os.clock() - t0 > 1.2 or not live(my)
+		if not tgt then return fin(false, noTargetReason(cid, anySame)) end
+		local tk = tgt:GetAttribute("BrainrotKey")
+		tried[tk] = true
+		local res = table.pack(invoke(5, "MergePlot", ckey, tk))
+		mv(("  REMOTE MergePlot(%s,%s) -> %s"):format(short(ckey), short(tk), argstr(res)))
+		local t1 = os.clock()
+		while os.clock() - t1 < 2 and carryAttr() do task.wait(0.1) end
+		if carryAttr() == nil then
+			fullFail = 0
+			return fin(true)
+		end
+	end
+	return fin(false, "server menolak MergePlot")
 end
 
 -- ===== lepas unit =====
@@ -677,13 +860,15 @@ local function dropAndLeave(my)
 				say("  sisa visual unit, dibersihkan")
 				cleanStale()
 			end
-			local h = hrpOf()
-			if h then walkTo(h.Position - h.CFrame.LookVector * 6, 1.5, 3, nil, my) end
+			if mode == "walk" then
+				local h = hrpOf()
+				if h then walkTo(h.Position - h.CFrame.LookVector * 4, 1.5, 1.5, nil, my, "menjauh") end
+			end
 			return true
 		end
-		if attempt == 2 and homePos then
+		if attempt == 2 and homePos and mode ~= "full" then
 			setStep("ke titik awal")
-			walkTo(homePos, 3, 6, nil, my)
+			walkTo(homePos, 3, 6, nil, my, "titik awal")
 			setStep("DropOff")
 		end
 		task.wait(1.0)
@@ -722,6 +907,8 @@ end
 -- ===== satu siklus. return: ok, alasan, fatal, soft =====
 local function cycle(mA, my, v, sync)
 	local before = unitCount()
+	local t00 = os.clock()
+	goal = nil
 	if carryAttr() == nil and carriedRaw() then
 		say("  ada sisa visual unit, dibersihkan")
 		cleanStale()
@@ -735,8 +922,23 @@ local function cycle(mA, my, v, sync)
 	local fresh = false
 	if not cm then
 		if not (mA and mA.Parent) then return false, "unit hilang", false, true end
-		cm = pickUp(mA, my, v)
-		if not cm then return false, "unit tidak terambil" end
+		if mode == "full" then
+			cm = fullPickup(mA, my, v)
+		elseif mode == "tele" then
+			cm = telePickup(mA, my, v)
+		else
+			cm = pickUp(mA, my, v)
+		end
+		if not cm then
+			if mode == "full" then
+				fullFail = fullFail + 1
+				if fullFail >= 3 then
+					say("FULL ditolak server 3x (PickUpPlot tanpa dekat), turun ke mode TELE")
+					setMode("tele")
+				end
+			end
+			return false, "unit tidak terambil"
+		end
 		fresh = true
 	end
 
@@ -751,7 +953,8 @@ local function cycle(mA, my, v, sync)
 	-- cek target yang valid; beri jeda karena CanMerge bisa telat sesaat setelah terambil
 	local tgt, anySame = nearestSame(cm, ckey, cid, nil)
 	local tw = os.clock()
-	while not tgt and os.clock() - tw < 1.2 and alive(my) do
+	local grace = (fresh and intended and ckey ~= intended) and 0.5 or 1.2
+	while not tgt and os.clock() - tw < grace and alive(my) do
 		task.wait(0.15)
 		tgt, anySame = nearestSame(cm, ckey, cid, nil)
 	end
@@ -767,9 +970,19 @@ local function cycle(mA, my, v, sync)
 	local hadRec = getRec(ckey) ~= nil
 	L(v, ("  terambil: %s (id=%s)"):format(short(ckey), tostring(cid)))
 
-	local reached, tkeys, touches, why = goMerge(cm, ckey, cid, my, v)
+	local runner = (mode == "full") and fullMerge or goMerge
+	local reached, tkeys, touches, why = runner(cm, ckey, cid, my, v)
 	if #touches > 0 then L(v or not reached, "  menyentuh: " .. table.concat(touches, ", ")) end
-	if not reached then
+	if reached then
+		say(("  MERGE OK %s [%s] %.1fs"):format(short(ckey), MODENAME[mode], os.clock() - t00))
+	else
+		if mode == "full" and why == "server menolak MergePlot" then
+			fullFail = fullFail + 1
+			if fullFail >= 3 then
+				say("FULL ditolak server 3x (MergePlot tanpa dekat), turun ke mode TELE")
+				setMode("tele")
+			end
+		end
 		if why == "dibatalkan" then return false, why end
 		say(("  merge tidak terjadi (%s)"):format(tostring(why)))
 		env.AM_SKIP[ckey] = os.clock() + 60
@@ -849,7 +1062,7 @@ local function startWatchdog(my)
 			if h and (not lastPos or (h.Position - lastPos).Magnitude > 1.5) then
 				lastPos, lastMove = h.Position, os.clock()
 			end
-			if step:find("^menunggu") or step:find("^DropOff") or step:find("^ke titik") then
+			if step:find("^menunggu") or step:find("^DropOff") or step:find("^ke titik") or step:find("^FULL") then
 				lastMove = os.clock()
 			end
 			if os.clock() - lastMove > 6 then
@@ -891,7 +1104,9 @@ local function setOn(on)
 					lastRank = rk
 					say("level dikerjakan: " .. tostring(rk))
 				end
+				local tc = os.clock()
 				local ok, why, fatal, soft = cycle(cand, my, false, false)
+				mv(("  = siklus %s%s %.1fs [%s]"):format(ok and "OK" or "GAGAL", why and (": " .. tostring(why)) or "", os.clock() - tc, MODENAME[mode]))
 				if not alive(my) then break end
 				if ok then
 					fails = 0
@@ -983,6 +1198,13 @@ mkBtn("Test", 0, 0.2, 92, 28, function()
 			status.Text = ("selesai | merged:%d salah:%d drop:%d"):format(total, wrong, drops)
 		end
 	end)
+end)
+modeBtn = mkBtn("Mode: JALAN", 0, 0.6, 122, 28, function()
+	setMode(mode == "walk" and "tele" or (mode == "tele" and "full" or "walk"))
+end)
+mkBtn("Log: DETAIL", 0.6, 0.4, 122, 28, function(b)
+	verbose = not verbose
+	b.Text = verbose and "Log: DETAIL" or "Log: RINGKAS"
 end)
 mkBtn("Info", 0.2, 0.2, 92, 28, function()
 	local ok, e = pcall(info)
@@ -1088,7 +1310,7 @@ local function opBtn(text, xoff, delta)
 	b.Activated:Connect(function()
 		OPACITY = math.clamp(math.floor((OPACITY + delta) * 100 + 0.5) / 100, 0.05, 1)
 		applyOpacity()
-		bar.Text = ("  Auto Merge v12 | opasitas %d%%"):format(math.floor(OPACITY * 100 + 0.5))
+		bar.Text = ("  Auto Merge v13 | opasitas %d%%"):format(math.floor(OPACITY * 100 + 0.5))
 	end)
 end
 opBtn("+", -90, 0.1)
@@ -1096,4 +1318,4 @@ opBtn("-", -60, -0.1)
 
 collect()
 applyOpacity()
-bar.Text = "  Auto Merge v12 | opasitas 10%"
+bar.Text = "  Auto Merge v13 | opasitas 10%"
