@@ -1,0 +1,916 @@
+local env = getgenv()
+local RS  = game:GetService("ReplicatedStorage")
+local CS  = game:GetService("CollectionService")
+local UIS = game:GetService("UserInputService")
+local LP  = game:GetService("Players").LocalPlayer
+
+env.AM_ON = false
+env.AM_GEN = (env.AM_GEN or 0) + 1
+local gen = env.AM_GEN
+local token = 0
+local abortCycle = false
+local function alive(my) return my == token and env.AM_GEN == gen end
+local function live(my) return alive(my) and not abortCycle end
+
+-- ===== GUI =====
+local root = LP:WaitForChild("PlayerGui")
+pcall(function() if gethui then root = gethui() end end)
+for _, p in ipairs({ root, LP.PlayerGui }) do
+	for _, n in ipairs({ "AM11", "AM10", "AM9", "AM8", "AM7", "AM6", "AM5", "AM4", "AM3", "AM2", "Rec", "Probe", "SrcScan", "SimpleSpy", "AutoMergeHUD", "MergeSpyHUD" }) do
+		pcall(function() p[n]:Destroy() end)
+	end
+end
+local gui = Instance.new("ScreenGui")
+gui.Name, gui.ResetOnSpawn, gui.DisplayOrder = "AM11", false, 999
+gui.Parent = root
+
+local win = Instance.new("Frame")
+win.Size = UDim2.new(0.58, 0, 0.62, 0)
+win.Position = UDim2.new(0.02, 0, 0.22, 0)
+win.BackgroundColor3 = Color3.fromRGB(18, 18, 22)
+win.BorderSizePixel = 0
+win.Parent = gui
+Instance.new("UICorner", win).CornerRadius = UDim.new(0, 8)
+
+local bar = Instance.new("TextLabel")
+bar.Size = UDim2.new(1, 0, 0, 26)
+bar.BackgroundColor3 = Color3.fromRGB(35, 35, 45)
+bar.BorderSizePixel = 0
+bar.TextColor3 = Color3.new(1, 1, 1)
+bar.Font = Enum.Font.GothamBold
+bar.TextSize = 13
+bar.TextXAlignment = Enum.TextXAlignment.Left
+bar.Text = "  Auto Merge v11 (geser di sini)"
+bar.Parent = win
+Instance.new("UICorner", bar).CornerRadius = UDim.new(0, 8)
+
+local function mkBtn(text, x, w, y, h, cb)
+	local b = Instance.new("TextButton")
+	b.Size = UDim2.new(w, -4, 0, h)
+	b.Position = UDim2.new(x, 2, 0, y)
+	b.BackgroundColor3 = Color3.fromRGB(55, 55, 70)
+	b.BorderSizePixel = 0
+	b.TextColor3 = Color3.new(1, 1, 1)
+	b.Font = Enum.Font.GothamMedium
+	b.TextSize = 13
+	b.Text = text
+	b.Parent = win
+	Instance.new("UICorner", b).CornerRadius = UDim.new(0, 5)
+	b.Activated:Connect(function() cb(b) end)
+	return b
+end
+
+local toggle = mkBtn("OFF", 0, 1, 30, 38, function() end)
+toggle.Size = UDim2.new(1, -8, 0, 38)
+toggle.Position = UDim2.new(0, 4, 0, 30)
+toggle.TextSize = 18
+toggle.BackgroundColor3 = Color3.fromRGB(150, 50, 50)
+toggle.TextColor3 = Color3.fromRGB(255, 120, 120)
+
+local status = Instance.new("TextLabel")
+status.Size = UDim2.new(1, -8, 0, 18)
+status.Position = UDim2.new(0, 4, 0, 70)
+status.BackgroundTransparency = 1
+status.TextColor3 = Color3.fromRGB(180, 220, 255)
+status.Font = Enum.Font.Code
+status.TextSize = 12
+status.TextXAlignment = Enum.TextXAlignment.Left
+status.Text = "siap"
+status.Parent = win
+
+local scroll = Instance.new("ScrollingFrame")
+scroll.Position = UDim2.new(0, 4, 0, 124)
+scroll.Size = UDim2.new(1, -8, 1, -128)
+scroll.BackgroundColor3 = Color3.fromRGB(10, 10, 14)
+scroll.BorderSizePixel = 0
+scroll.ScrollBarThickness = 4
+scroll.CanvasSize = UDim2.new()
+scroll.AutomaticCanvasSize = Enum.AutomaticSize.Y
+scroll.Parent = win
+
+local out = Instance.new("TextBox")
+out.Size = UDim2.new(1, -6, 0, 0)
+out.Position = UDim2.new(0, 3, 0, 0)
+out.AutomaticSize = Enum.AutomaticSize.Y
+out.BackgroundTransparency = 1
+out.TextColor3 = Color3.fromRGB(220, 220, 220)
+out.Font = Enum.Font.Code
+out.TextSize = 11
+out.TextXAlignment = Enum.TextXAlignment.Left
+out.TextYAlignment = Enum.TextYAlignment.Top
+out.TextWrapped = true
+out.MultiLine = true
+out.ClearTextOnFocus = false
+out.TextEditable = false
+out.Text = ""
+out.Parent = scroll
+
+local lines, dirtyLog = {}, false
+local function say(s)
+	lines[#lines + 1] = os.date("%H:%M:%S ") .. tostring(s)
+	if #lines > 150 then table.remove(lines, 1) end
+	dirtyLog = true
+end
+local function L(v, s) if v then say(s) end end
+task.spawn(function()
+	while gui.Parent and env.AM_GEN == gen do
+		task.wait(0.4)
+		if dirtyLog then
+			dirtyLog = false
+			out.Text = table.concat(lines, "\n")
+			scroll.CanvasPosition = Vector2.new(0, 1e7)
+		end
+	end
+end)
+
+-- ===== status langkah =====
+local busy, step, stepT, total = false, "siap", os.clock(), 0
+local wrong, drops = 0, 0
+local function setStep(s) step, stepT = s, os.clock() end
+task.spawn(function()
+	while gui.Parent and env.AM_GEN == gen do
+		if busy then
+			status.Text = ("%s (%.0fs) | merged:%d salah:%d drop:%d"):format(step, os.clock() - stepT, total, wrong, drops)
+		end
+		task.wait(0.5)
+	end
+end)
+
+-- ===== helper (pcall langsung, tanpa thread) =====
+local function P(fn, ...)
+	local ok, r = pcall(fn, ...)
+	if ok then return r end
+end
+
+local BU, RF, UM
+do
+	local ok, e = pcall(function()
+		require(RS:WaitForChild("Framework"))
+		local BUm = RS.Framework.Features.BrainrotSystem.BrainrotUtil
+		BU = require(BUm)
+		RF = BUm:WaitForChild("RemoteFunction", 5)
+	end)
+	say(ok and ("init ok | RF: " .. (RF and RF:GetFullName() or "TIDAK ADA")) or ("init GAGAL: " .. tostring(e)))
+end
+
+-- modul urutan level (punya GetNextId), dicari lewat upvalue BrainrotUtil
+do
+	local getups = (debug and debug.getupvalues) or getupvalues
+	if getups and BU then
+		for _, name in ipairs({ "IsAutoMergeablePlotUnit", "GetUpgradeLevelText", "GetUpgradeNextText" }) do
+			local fn = BU[name]
+			if typeof(fn) == "function" then
+				local ok, ups = pcall(getups, fn)
+				if ok and type(ups) == "table" then
+					for _, uv in pairs(ups) do
+						if type(uv) == "table" then
+							local okn, gn = pcall(function() return uv.GetNextId end)
+							if okn and typeof(gn) == "function" then UM = uv break end
+						end
+					end
+				end
+			end
+			if UM then break end
+		end
+	end
+	say(UM and "modul urutan level: ketemu" or "modul urutan level: TIDAK ketemu (pakai Health sebagai perkiraan)")
+end
+
+-- InvokeServer dengan batas waktu (satu-satunya yang bisa menggantung)
+local function invoke(timeout, ...)
+	local args, res, done = table.pack(...), nil, false
+	task.spawn(function()
+		res = table.pack(pcall(function() return RF:InvokeServer(table.unpack(args, 1, args.n)) end))
+		done = true
+	end)
+	local t0 = os.clock()
+	while not done and os.clock() - t0 < timeout do task.wait(0.03) end
+	if not done then return false, "TIMEOUT" end
+	return table.unpack(res, 1, res.n)
+end
+
+local function short(k)
+	k = tostring(k)
+	return (k:match("^%a+") or "?") .. ":" .. k:sub(-4)
+end
+local function hrpOf() local c = LP.Character return c and c:FindFirstChild("HumanoidRootPart") end
+local function humOf() local c = LP.Character return c and c:FindFirstChildOfClass("Humanoid") end
+local function frontPos()
+	local c = LP.Character
+	if not c then return nil end
+	local a = c:FindFirstChild("BodyFrontAttachment", true)
+	if a and a:IsA("Attachment") then return a.WorldPosition end
+	local h = hrpOf()
+	return h and h.Position
+end
+local function xz(a, b) return math.sqrt((a.X - b.X) ^ 2 + (a.Z - b.Z) ^ 2) end
+local function carried()
+	local ch = LP.Character
+	if not ch then return nil end
+	local m = P(function() return BU:GetPickedUpBrainrot(ch) end)
+	if typeof(m) == "Instance" then return m end
+end
+local function unitCount()
+	local n = P(function() return BU:GetPlotUnitCount(LP) end)
+	return type(n) == "number" and n or -1
+end
+local function getPairs()
+	local r = P(function() return BU:CollectAutoMergePairs(LP) end)
+	return type(r) == "table" and r or {}
+end
+local function getRec(k) return P(function() return BU:GetBrainrot(LP, k) end) end
+local function probeOf(m)
+	local p = P(function() return BU:GetMergeProbePosition(m) end)
+	return typeof(p) == "Vector3" and p or m:GetPivot().Position
+end
+local function radiusOf(m)
+	local r = P(function() return BU:GetMergeRadius(m) end)
+	return type(r) == "number" and r or 2.5
+end
+
+local mine = setmetatable({}, { __mode = "k" })
+local pmC, pmT
+local function plotModels()
+	if pmC and os.clock() - pmT < 0.3 then return pmC.list, pmC.byKey end
+	local list, byKey = {}, {}
+	for _, m in ipairs(CS:GetTagged("PlotBrainrot")) do
+		if m:IsA("Model") and m.Parent
+			and not m:GetAttribute("PlotEffectClone") and not m:GetAttribute("MergeEffectClone") then
+			local k = m:GetAttribute("BrainrotKey")
+			if typeof(k) == "string" then
+				if mine[m] == nil then
+					mine[m] = P(function() return BU:IsPlotUnitOnPlayerPlot(LP, m) end) == true
+				end
+				if mine[m] then list[#list + 1] = m byKey[k] = m end
+			end
+		end
+	end
+	pmC, pmT = { list = list, byKey = byKey }, os.clock()
+	return list, byKey
+end
+local function unitOf(inst)
+	local p = inst
+	while p and p ~= workspace do
+		if p:IsA("Model") and CS:HasTag(p, "PlotBrainrot") then return p end
+		p = p.Parent
+	end
+end
+
+-- unit level tertinggi tidak punya level berikutnya -> tidak bisa merge
+local function canPair(cid)
+	if not UM then return true end
+	local ok, nx = pcall(function() return UM:GetNextId(cid) end)
+	if ok and nx == nil then return false end
+	return true
+end
+
+-- ===== urutan level (rendah dulu), di-cache =====
+local function computeRanks(byKey)
+	local ids, health = {}, {}
+	for _, m in pairs(byKey) do
+		local id = m:GetAttribute("BrainrotId")
+		if type(id) == "string" then
+			ids[id] = true
+			health[id] = tonumber(m:GetAttribute("Health")) or 0
+		end
+	end
+	local ranks, how = {}, "Health (perkiraan)"
+	if UM then
+		local known, preds, queue = {}, {}, {}
+		for id in pairs(ids) do known[id] = true end
+		for l = 1, 80 do
+			local i = P(function() return UM:GetIdForSpawnLevel(l) end)
+			if type(i) == "string" then known[i] = true end
+		end
+		for id in pairs(known) do queue[#queue + 1] = id end
+		local n = 1
+		while queue[n] and n < 400 do
+			local id = queue[n]
+			n += 1
+			local nx = P(function() return UM:GetNextId(id) end)
+			if type(nx) == "string" and nx ~= id then
+				preds[nx] = preds[nx] or {}
+				table.insert(preds[nx], id)
+				if not known[nx] then known[nx] = true queue[#queue + 1] = nx end
+			end
+		end
+		local memo = {}
+		local function depth(id, seen)
+			if memo[id] then return memo[id] end
+			if seen[id] then return 0 end
+			seen[id] = true
+			local best = 0
+			for _, p in ipairs(preds[id] or {}) do
+				best = math.max(best, depth(p, seen) + 1)
+			end
+			seen[id] = nil
+			memo[id] = best
+			return best
+		end
+		for id in pairs(ids) do ranks[id] = depth(id, {}) end
+		how = "rantai GetNextId"
+	else
+		for id in pairs(ids) do ranks[id] = health[id] end
+	end
+	return ranks, how
+end
+
+local rkCache = { sig = "", ranks = {}, how = "" }
+local function getRanks(byKey)
+	local set, ids = {}, {}
+	for _, m in pairs(byKey) do
+		local id = m:GetAttribute("BrainrotId")
+		if type(id) == "string" and not set[id] then set[id] = true ids[#ids + 1] = id end
+	end
+	table.sort(ids)
+	local sig = table.concat(ids, ",")
+	if sig ~= rkCache.sig then
+		local r, how = computeRanks(byKey)
+		rkCache = { sig = sig, ranks = r, how = how }
+	end
+	return rkCache.ranks, rkCache.how
+end
+
+local function rankText(ranks)
+	local arr = {}
+	for id, r in pairs(ranks) do arr[#arr + 1] = { id, r } end
+	table.sort(arr, function(a, b) return a[2] < b[2] end)
+	local t = {}
+	for _, e in ipairs(arr) do t[#t + 1] = ("%s(%s)"):format(e[1], tostring(e[2])) end
+	return table.concat(t, " < ")
+end
+
+-- ===== jalan kaki =====
+local function walkTo(pos, stopDist, timeout, abort, my)
+	local t0 = os.clock()
+	local lastP, lastT
+	while os.clock() - t0 < timeout do
+		if not live(my) then return false end
+		if abort and abort() then return true end
+		local h, r = humOf(), hrpOf()
+		if not (h and r and h.Health > 0) then return false end
+		local flat = Vector3.new(pos.X - r.Position.X, 0, pos.Z - r.Position.Z).Magnitude
+		if flat <= stopDist then return true end
+		h:MoveTo(Vector3.new(pos.X, r.Position.Y, pos.Z))
+		if not lastP or (r.Position - lastP).Magnitude > 0.8 then
+			lastP, lastT = r.Position, os.clock()
+		elseif os.clock() - lastT > 1.2 then
+			h.Jump = true
+			lastT = os.clock()
+		end
+		task.wait(0.1)
+	end
+	return false
+end
+
+-- ===== jalur yang menghindari unit lain =====
+local CLEAR = 2.0 -- lebar karakter + margin
+
+local function hitInfo(m)
+	local hb = P(function() return BU:GetMergeHitbox(m) end)
+	if typeof(hb) == "Instance" and hb:IsA("BasePart") then
+		local s = hb.Size
+		return hb.Position, math.max(s.X, s.Z) / 2
+	end
+	return m:GetPivot().Position, radiusOf(m)
+end
+
+local function obstaclesFor(except)
+	local res = {}
+	for _, m in ipairs((plotModels())) do
+		if m ~= except then
+			local pos, r = hitInfo(m)
+			res[#res + 1] = { p = Vector3.new(pos.X, 0, pos.Z), r = r + CLEAR }
+		end
+	end
+	return res
+end
+
+local function segHit(a, b, o)
+	local ab = b - a
+	local len2 = ab.X * ab.X + ab.Z * ab.Z
+	if len2 < 1e-6 then return 0, (a - o.p).Magnitude end
+	local t = ((o.p.X - a.X) * ab.X + (o.p.Z - a.Z) * ab.Z) / len2
+	t = math.clamp(t, 0, 1)
+	local c = a + ab * t
+	return t, Vector3.new(c.X - o.p.X, 0, c.Z - o.p.Z).Magnitude
+end
+
+local function planPath(from, to, obs)
+	from = Vector3.new(from.X, 0, from.Z)
+	to = Vector3.new(to.X, 0, to.Z)
+	-- rintangan yang menutupi titik awal/tujuan tidak bisa dihindari, abaikan
+	local active = {}
+	for _, o in ipairs(obs) do
+		if (o.p - from).Magnitude > o.r and (o.p - to).Magnitude > o.r then
+			active[#active + 1] = o
+		end
+	end
+	local pts = { from, to }
+	for _ = 1, 24 do
+		local fixed = true
+		for i = 1, #pts - 1 do
+			local a, b = pts[i], pts[i + 1]
+			local worst, wt
+			for _, o in ipairs(active) do
+				local t, d = segHit(a, b, o)
+				if d < o.r - 0.05 and (not wt or t < wt) then worst, wt = o, t end
+			end
+			if worst then
+				local dir = b - a
+				dir = dir.Magnitude > 0 and dir.Unit or Vector3.new(0, 0, 1)
+				local perp = Vector3.new(-dir.Z, 0, dir.X)
+				local off = worst.r * 1.25 + 0.6
+				local c1, c2 = worst.p + perp * off, worst.p - perp * off
+				local function cost(c)
+					local pen = 0
+					for _, o in ipairs(active) do
+						if o ~= worst and (o.p - c).Magnitude < o.r then pen += 100 end
+					end
+					return (c - a).Magnitude + (b - c).Magnitude + pen
+				end
+				table.insert(pts, i + 1, cost(c1) <= cost(c2) and c1 or c2)
+				fixed = false
+				break
+			end
+		end
+		if fixed then break end
+	end
+	table.remove(pts, 1)
+	return pts
+end
+
+local function walkPath(pts, timeoutPer, abort, my)
+	for i, p in ipairs(pts) do
+		walkTo(p, (i == #pts) and 0.8 or 1.2, timeoutPer, abort, my)
+		if abort and abort() then return true end
+		if not live(my) then return false end
+	end
+	return true
+end
+
+-- 1) jalan ke unit A (menghindari unit lain) sampai terambil oleh game
+local function pickUp(m, my, v)
+	local key = m:GetAttribute("BrainrotKey")
+	local pos = m:GetPivot().Position
+	setStep("jalan ke " .. short(key))
+	L(v, ("ambil %s (id=%s) | pos=(%.0f,%.0f,%.0f)"):format(short(key), tostring(m:GetAttribute("BrainrotId")), pos.X, pos.Y, pos.Z))
+	local function approach()
+		local r = hrpOf()
+		if not r then return end
+		local pts = planPath(r.Position, pos, obstaclesFor(m))
+		L(v, ("  jalur: %d titik"):format(#pts))
+		walkPath(pts, 10, function() return carried() ~= nil end, my)
+	end
+	approach()
+	local tries = 0
+	while not carried() and tries < 3 and live(my) do
+		tries += 1
+		L(v, "  belum terambil, mundur lalu masuk lagi " .. tries)
+		local r = hrpOf()
+		if r then
+			local dir = Vector3.new(r.Position.X - pos.X, 0, r.Position.Z - pos.Z)
+			dir = dir.Magnitude > 0.1 and dir.Unit or Vector3.new(0, 0, 1)
+			walkTo(pos + dir * 4, 1.2, 3, function() return carried() ~= nil end, my)
+		end
+		approach()
+		task.wait(0.1)
+	end
+	for _ = 1, 8 do
+		if carried() then break end
+		task.wait(0.1)
+	end
+	return carried()
+end
+
+-- 2) target = unit sejenis terdekat (dengan stickiness)
+local function nearestSame(cm, ckey, cid, cur)
+	if not canPair(cid) then return nil end
+	local list = plotModels()
+	local f = frontPos()
+	local best, bd
+	for _, m in ipairs(list) do
+		local k = m:GetAttribute("BrainrotKey")
+		if m ~= cm and k ~= ckey and m:GetAttribute("BrainrotId") == cid then
+			local d = f and xz(f, probeOf(m)) or 0
+			if not bd or d < bd then best, bd = m, d end
+		end
+	end
+	if cur and cur.Parent and best and cur ~= best and f then
+		if xz(f, probeOf(cur)) <= bd + 4 then return cur end
+	end
+	return best
+end
+
+-- 3) jalan ke target; merge dengan unit sejenis mana pun yang tersentuh sah
+local function goMerge(cm, ckey, cid, my, v)
+	local tkeys, touches, conns = {}, {}, {}
+	for _, part in ipairs(cm:GetDescendants()) do
+		if part:IsA("BasePart") then
+			conns[#conns + 1] = part.Touched:Connect(function(o)
+				local u = unitOf(o)
+				if u and u ~= cm then
+					local k = u:GetAttribute("BrainrotKey")
+					if typeof(k) == "string" and not tkeys[k] then
+						tkeys[k] = true
+						touches[#touches + 1] = ("%s(%s)"):format(short(k), tostring(u:GetAttribute("BrainrotId")))
+					end
+				end
+			end)
+		end
+	end
+	local function finish(ok, why)
+		for _, c in ipairs(conns) do c:Disconnect() end
+		return ok, tkeys, touches, why
+	end
+
+	local target
+	local t0, lastPick = os.clock(), 0
+	local inRangeSince, turns = nil, 0
+	setStep("cari target sejenis")
+	while os.clock() - t0 < 20 do
+		if not live(my) then return finish(false, "dibatalkan") end
+		if not carried() then return finish(true) end
+		if os.clock() - lastPick > 0.5 then
+			lastPick = os.clock()
+			local nt = nearestSame(cm, ckey, cid, target)
+			if nt ~= target then
+				target = nt
+				if target then
+					L(v, ("  target %s"):format(short(target:GetAttribute("BrainrotKey"))))
+					setStep("jalan ke target " .. short(target:GetAttribute("BrainrotKey")))
+				end
+			end
+		end
+		if not target then return finish(false, "tidak ada target sejenis") end
+		local pr = probeOf(target)
+		local f = frontPos()
+		local d = f and xz(f, pr) or 99
+		local R = radiusOf(cm) + radiusOf(target)
+		local h = humOf()
+		if not h then return finish(false, "tidak ada humanoid") end
+		if d <= R then
+			inRangeSince = inRangeSince or os.clock()
+			if os.clock() - inRangeSince > 1.2 then
+				turns += 1
+				say(("  dekat tapi belum merge (d=%.1f R=%.1f), mundur lalu masuk lagi #%d"):format(d, R, turns))
+				-- mundur lurus dari target lalu masuk lagi supaya sentuhan (Touched) terpicu ulang
+				local dir = Vector3.new(f.X - pr.X, 0, f.Z - pr.Z)
+				dir = dir.Magnitude > 0.1 and dir.Unit or Vector3.new(0, 0, 1)
+				local ang = ((turns % 2 == 1) and 1 or -1) * math.rad(35 * math.ceil(turns / 2))
+				local cs, sn = math.cos(ang), math.sin(ang)
+				local rot = Vector3.new(dir.X * cs - dir.Z * sn, 0, dir.X * sn + dir.Z * cs)
+				walkTo(pr + rot * (R + 4), 1, 3, function() return not carried() end, my)
+				inRangeSince = nil
+			else
+				h:MoveTo(Vector3.new(pr.X, hrpOf() and hrpOf().Position.Y or pr.Y, pr.Z))
+			end
+		else
+			inRangeSince = nil
+			h:MoveTo(Vector3.new(pr.X, hrpOf() and hrpOf().Position.Y or pr.Y, pr.Z))
+		end
+		task.wait(0.1)
+	end
+	return finish(not carried(), "timeout 20 detik")
+end
+
+env.AM_SKIP = {}
+
+-- lepas unit: coba sampai 3x (server bisa menahan drop sebentar), lalu menjauh
+local function dropAndLeave(my, v)
+	setStep("DropOff")
+	for attempt = 1, 3 do
+		local okd, rd = invoke(6, "DropOff")
+		L(true, ("  DropOff #%d ok=%s r=%s"):format(attempt, tostring(okd), tostring(rd)))
+		local t0 = os.clock()
+		while os.clock() - t0 < 1.5 and carried() do task.wait(0.1) end
+		if not carried() then
+			drops += 1
+			local h = hrpOf()
+			if h then walkTo(h.Position - h.CFrame.LookVector * 6, 1.5, 3, nil, my) end
+			return true
+		end
+		task.wait(1.2)
+		if not alive(my) then return false end
+	end
+	say("  unit MASIH terbawa setelah 3x DropOff")
+	return false
+end
+
+-- ===== verifikasi merge: satu pekerja untuk semua =====
+local vq, vrun = {}, false
+local function queueVerify(item)
+	vq[#vq + 1] = item
+	if vrun then return end
+	vrun = true
+	task.spawn(function()
+		while #vq > 0 and env.AM_GEN == gen do
+			local now, n = os.clock(), unitCount()
+			for i = #vq, 1, -1 do
+				local it = vq[i]
+				local gone = it.hadRec and getRec(it.ckey) == nil
+				if gone or (n ~= -1 and it.before ~= -1 and n < it.before) then
+					total += 1
+					table.remove(vq, i)
+				elseif now - it.t0 > 8 then
+					say(("perhatian: %s belum terverifikasi (unit %s -> %s)"):format(short(it.ckey), tostring(it.before), tostring(n)))
+					table.remove(vq, i)
+				end
+			end
+			task.wait(0.5)
+		end
+		vrun = false
+	end)
+end
+
+-- ===== satu siklus. return: ok, alasan, fatal, soft =====
+local function cycle(mA, my, v, sync)
+	local before = unitCount()
+	local cm = carried()
+	local fresh = false
+	if not cm then
+		if not (mA and mA.Parent) then return false, "unit hilang", false, true end
+		cm = pickUp(mA, my, v)
+		if not cm then return false, "unit tidak terambil" end
+		fresh = true
+	end
+
+	local ckey, cid = cm:GetAttribute("BrainrotKey"), cm:GetAttribute("BrainrotId")
+	local intended = mA and mA:GetAttribute("BrainrotKey")
+	if fresh and intended and ckey ~= intended then
+		wrong += 1
+		say(("  salah ambil: %s (id=%s), niat %s"):format(short(ckey), tostring(cid), short(intended)))
+	end
+
+	if not nearestSame(cm, ckey, cid, nil) then
+		local tag = canPair(cid) and "tanpa pasangan" or "level tertinggi, tidak bisa merge"
+		say(("  membawa %s: %s, dilepas"):format(short(ckey), tag))
+		env.AM_SKIP[ckey] = os.clock() + 60
+		if not dropAndLeave(my, v) then return false, "unit terbawa tidak bisa dilepas", true end
+		return false, tag, false, true
+	end
+
+	local hadRec = getRec(ckey) ~= nil
+	L(v, ("  terambil: %s (id=%s)"):format(short(ckey), tostring(cid)))
+
+	local reached, tkeys, touches, why = goMerge(cm, ckey, cid, my, v)
+	if #touches > 0 then L(v or not reached, "  menyentuh: " .. table.concat(touches, ", ")) end
+	if not reached then
+		if why == "dibatalkan" then return false, why end
+		say(("  merge tidak terjadi (%s)"):format(tostring(why)))
+		env.AM_SKIP[ckey] = os.clock() + 60
+		if carried() then
+			if not dropAndLeave(my, v) then return false, "unit terbawa tidak bisa dilepas", true end
+		end
+		return false, why
+	end
+
+	env.AM_SKIP[ckey] = os.clock() + 3
+	for k in pairs(tkeys) do env.AM_SKIP[k] = os.clock() + 3 end
+
+	if sync then
+		local t0, okv, n = os.clock(), false, -1
+		while os.clock() - t0 < 8 do
+			n = unitCount()
+			if (hadRec and getRec(ckey) == nil) or (n ~= -1 and before ~= -1 and n < before) then okv = true break end
+			task.wait(0.25)
+		end
+		L(true, ("  verifikasi: %s (t+%.1fs, unit %s -> %s)"):format(okv and "OK" or "BELUM", os.clock() - t0, tostring(before), tostring(n)))
+		if okv then total += 1 end
+		return okv, okv and nil or "belum terverifikasi"
+	end
+	queueVerify({ ckey = ckey, hadRec = hadRec, before = before, t0 = os.clock() })
+	return true
+end
+
+-- ===== pilih unit A: level terendah dulu, lalu terdekat =====
+local function nextCandidate()
+	local ps = getPairs()
+	local _, byKey = plotModels()
+	local ranks, how = getRanks(byKey)
+	local r = hrpOf()
+	local best, bs, bestRank
+	for _, pr in ipairs(ps) do
+		for _, k in ipairs(pr) do
+			local m = byKey[k]
+			if m and (env.AM_SKIP[k] or 0) < os.clock() and getRec(k) then
+				local rk = ranks[m:GetAttribute("BrainrotId")] or 0
+				local d = r and (m:GetPivot().Position - r.Position).Magnitude or 0
+				local score = rk * 100000 + d
+				if not bs or score < bs then best, bs, bestRank = m, score, rk end
+			end
+		end
+	end
+	return best, #ps, ranks, how, bestRank
+end
+
+-- ===== kontrol =====
+local function setBtn(on)
+	toggle.Text = on and "ON" or "OFF"
+	toggle.BackgroundColor3 = on and Color3.fromRGB(40, 150, 70) or Color3.fromRGB(150, 50, 50)
+	toggle.TextColor3 = on and Color3.fromRGB(120, 255, 150) or Color3.fromRGB(255, 120, 120)
+end
+local function stopWalking()
+	local h, r = humOf(), hrpOf()
+	if h and r then h:MoveTo(r.Position) end
+end
+
+-- watchdog: karakter hampir tidak bergerak 6 detik -> batalkan siklus, lanjut yang lain
+local function startWatchdog(my)
+	task.spawn(function()
+		local lastPos, lastMove = nil, os.clock()
+		while env.AM_ON and alive(my) do
+			task.wait(0.5)
+			local h = hrpOf()
+			if h and (not lastPos or (h.Position - lastPos).Magnitude > 1.5) then
+				lastPos, lastMove = h.Position, os.clock()
+			end
+			if step:sub(1, 7) == "menunggu" or step == "DropOff" then lastMove = os.clock() end
+			if os.clock() - lastMove > 6 then
+				say(('WATCHDOG: macet di "%s", siklus dibatalkan'):format(step))
+				abortCycle = true
+				lastMove = os.clock()
+			end
+		end
+	end)
+end
+
+local function setOn(on)
+	token += 1
+	local my = token
+	env.AM_ON = on
+	abortCycle = false
+	setBtn(on)
+	say(on and "== ON ==" or "== OFF ==")
+	if not on then
+		busy = false
+		stopWalking()
+		return
+	end
+	busy = true
+	startWatchdog(my)
+	task.spawn(function()
+		local fails, lastRank = 0, nil
+		while env.AM_ON and alive(my) do
+			abortCycle = false
+			setStep("cari unit")
+			local cand, n, _, _, rk = nextCandidate()
+			if not cand and not carried() then
+				setStep("menunggu pasangan (pairs=" .. n .. ")")
+				task.wait(0.1)
+			else
+				if rk and rk ~= lastRank then
+					lastRank = rk
+					say("level dikerjakan: " .. tostring(rk))
+				end
+				local ok, why, fatal, soft = cycle(cand, my, false, false)
+				if not alive(my) then break end
+				if ok then
+					fails = 0
+				elseif abortCycle or why == "dibatalkan" or soft then
+					abortCycle = false
+					if cand then env.AM_SKIP[cand:GetAttribute("BrainrotKey")] = os.clock() + 10 end
+				else
+					fails += 1
+					if cand then env.AM_SKIP[cand:GetAttribute("BrainrotKey")] = os.clock() + 15 end
+					say("gagal: " .. tostring(why))
+					if fatal then
+						say("STOP: ada unit terbawa yang tidak bisa dilepas. Lepas manual, lalu ON lagi.")
+						break
+					end
+					if fails >= 6 then say("gagal 6x berturut, stop") break end
+				end
+				task.wait()
+			end
+		end
+		if alive(my) then
+			env.AM_ON = false
+			busy = false
+			setBtn(false)
+			setStep("selesai")
+		end
+	end)
+end
+toggle.Activated:Connect(function() setOn(not env.AM_ON) end)
+
+mkBtn("Test 1x", 0, 0.25, 92, 28, function()
+	if busy then status.Text = "sedang jalan, tap Reset dulu" return end
+	token += 1
+	local my = token
+	abortCycle = false
+	busy = true
+	task.spawn(function()
+		local cand, n, ranks, how, rk = nextCandidate()
+		local h = hrpOf()
+		say(("TEST | pairs=%d unit=%s | karakter=%s"):format(n, tostring(unitCount()), tostring(h and h.Position)))
+		say(("urutan level [%s]: %s"):format(how, rankText(ranks)))
+		if not cand and not carried() then
+			say("tidak ada unit yang bisa dites")
+		else
+			if cand then
+				say(("dipilih: %s (level %s)"):format(short(cand:GetAttribute("BrainrotKey")), tostring(rk)))
+			end
+			local ok, why = cycle(cand, my, true, true)
+			say(ok and ">>> TEST BERHASIL" or (">>> TEST GAGAL: " .. tostring(why)))
+		end
+		if alive(my) then busy = false setStep("selesai") status.Text = ("selesai | merged:%d salah:%d drop:%d"):format(total, wrong, drops) end
+	end)
+end)
+mkBtn("Copy", 0.25, 0.25, 92, 28, function(b)
+	local cb = setclipboard or toclipboard or set_clipboard
+	if cb and pcall(cb, table.concat(lines, "\n")) then b.Text = "Copied!" else b.Text = "Tap-tahan" end
+	task.delay(1.2, function() b.Text = "Copy" end)
+end)
+mkBtn("Clear", 0.5, 0.25, 92, 28, function() lines = {} out.Text = "" end)
+mkBtn("Reset", 0.75, 0.25, 92, 28, function()
+	token += 1
+	env.AM_ON = false
+	busy = false
+	abortCycle = false
+	env.AM_SKIP = {}
+	setBtn(false)
+	stopWalking()
+	setStep("di-reset")
+	status.Text = "di-reset"
+	say("== RESET ==")
+end)
+
+local xb = Instance.new("TextButton")
+xb.Size = UDim2.new(0, 26, 0, 20)
+xb.Position = UDim2.new(1, -30, 0, 3)
+xb.BackgroundColor3 = Color3.fromRGB(60, 60, 75)
+xb.BorderSizePixel = 0
+xb.TextColor3 = Color3.new(1, 1, 1)
+xb.TextSize = 13
+xb.Text = "X"
+xb.Parent = bar
+Instance.new("UICorner", xb).CornerRadius = UDim.new(0, 4)
+xb.Activated:Connect(function() token += 1 env.AM_ON = false stopWalking() gui:Destroy() end)
+
+local drag, ds, sp
+bar.InputBegan:Connect(function(i)
+	if i.UserInputType == Enum.UserInputType.Touch or i.UserInputType == Enum.UserInputType.MouseButton1 then
+		drag, ds, sp = true, i.Position, win.Position
+		i.Changed:Connect(function() if i.UserInputState == Enum.UserInputState.End then drag = false end end)
+	end
+end)
+UIS.InputChanged:Connect(function(i)
+	if drag and (i.UserInputType == Enum.UserInputType.Touch or i.UserInputType == Enum.UserInputType.MouseMovement) then
+		local d = i.Position - ds
+		win.Position = UDim2.new(sp.X.Scale, sp.X.Offset + d.X, sp.Y.Scale, sp.Y.Offset + d.Y)
+	end
+end)
+
+say("siap. tap ON (atau Test 1x dulu, jangan sentuh joystick)")
+
+-- ===== OPASITAS HUD =====
+local OPACITY = 0.10 -- 0.10 = 10% opak
+
+local bgList = {}
+local function collect()
+	bgList = {}
+	local function add(o)
+		local isText = o:IsA("TextButton") or o:IsA("TextLabel") or o:IsA("TextBox")
+		if (o:IsA("Frame") or o:IsA("ScrollingFrame") or isText) and o.BackgroundTransparency < 1 then
+			bgList[#bgList + 1] = o
+		end
+		if isText then
+			o.TextStrokeTransparency = 0.5
+			o.TextStrokeColor3 = Color3.new(0, 0, 0)
+		end
+	end
+	add(win)
+	for _, d in ipairs(win:GetDescendants()) do add(d) end
+end
+
+local function applyOpacity()
+	local tr = 1 - OPACITY
+	for _, o in ipairs(bgList) do
+		if o.Parent then o.BackgroundTransparency = tr end
+	end
+	scroll.ScrollBarImageTransparency = 0.3
+end
+
+local function opBtn(text, xoff, delta)
+	local b = Instance.new("TextButton")
+	b.Size = UDim2.new(0, 26, 0, 20)
+	b.Position = UDim2.new(1, xoff, 0, 3)
+	b.BackgroundColor3 = Color3.fromRGB(60, 60, 75)
+	b.BorderSizePixel = 0
+	b.TextColor3 = Color3.new(1, 1, 1)
+	b.TextSize = 13
+	b.Text = text
+	b.Parent = bar
+	Instance.new("UICorner", b).CornerRadius = UDim.new(0, 4)
+	b.Activated:Connect(function()
+		OPACITY = math.clamp(math.floor((OPACITY + delta) * 100 + 0.5) / 100, 0.05, 1)
+		applyOpacity()
+		bar.Text = ("  Auto Merge v11 | opasitas %d%%"):format(math.floor(OPACITY * 100 + 0.5))
+	end)
+end
+opBtn("+", -90, 0.1)  -- lebih pekat
+opBtn("-", -60, -0.1) -- lebih transparan
+
+collect()
+applyOpacity()
+bar.Text = "  Auto Merge v11 | opasitas 10%"
