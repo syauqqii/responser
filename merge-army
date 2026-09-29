@@ -1,3 +1,4 @@
+-- Auto Merge v12
 local env = getgenv()
 local RS  = game:GetService("ReplicatedStorage")
 local CS  = game:GetService("CollectionService")
@@ -11,17 +12,19 @@ local token = 0
 local abortCycle = false
 local function alive(my) return my == token and env.AM_GEN == gen end
 local function live(my) return alive(my) and not abortCycle end
+env.AM_SKIP = {}
+env.AM_IDSKIP = {}
 
 -- ===== GUI =====
 local root = LP:WaitForChild("PlayerGui")
 pcall(function() if gethui then root = gethui() end end)
 for _, p in ipairs({ root, LP.PlayerGui }) do
-	for _, n in ipairs({ "AM11", "AM10", "AM9", "AM8", "AM7", "AM6", "AM5", "AM4", "AM3", "AM2", "Rec", "Probe", "SrcScan", "SimpleSpy", "AutoMergeHUD", "MergeSpyHUD" }) do
+	for _, n in ipairs({ "AM12", "AM11", "AM10", "AM9", "AM8", "AM7", "AM6", "AM5", "AM4", "AM3", "AM2", "Rec", "Probe", "SrcScan", "SimpleSpy", "AutoMergeHUD", "MergeSpyHUD" }) do
 		pcall(function() p[n]:Destroy() end)
 	end
 end
 local gui = Instance.new("ScreenGui")
-gui.Name, gui.ResetOnSpawn, gui.DisplayOrder = "AM11", false, 999
+gui.Name, gui.ResetOnSpawn, gui.DisplayOrder = "AM12", false, 999
 gui.Parent = root
 
 local win = Instance.new("Frame")
@@ -40,7 +43,7 @@ bar.TextColor3 = Color3.new(1, 1, 1)
 bar.Font = Enum.Font.GothamBold
 bar.TextSize = 13
 bar.TextXAlignment = Enum.TextXAlignment.Left
-bar.Text = "  Auto Merge v11 (geser di sini)"
+bar.Text = "  Auto Merge v12 (geser di sini)"
 bar.Parent = win
 Instance.new("UICorner", bar).CornerRadius = UDim.new(0, 8)
 
@@ -108,7 +111,7 @@ out.Parent = scroll
 local lines, dirtyLog = {}, false
 local function say(s)
 	lines[#lines + 1] = os.date("%H:%M:%S ") .. tostring(s)
-	if #lines > 150 then table.remove(lines, 1) end
+	if #lines > 200 then table.remove(lines, 1) end
 	dirtyLog = true
 end
 local function L(v, s) if v then say(s) end end
@@ -123,9 +126,9 @@ task.spawn(function()
 	end
 end)
 
--- ===== status langkah =====
-local busy, step, stepT, total = false, "siap", os.clock(), 0
-local wrong, drops = 0, 0
+-- ===== status =====
+local busy, step, stepT = false, "siap", os.clock()
+local total, wrong, drops = 0, 0, 0
 local function setStep(s) step, stepT = s, os.clock() end
 task.spawn(function()
 	while gui.Parent and env.AM_GEN == gen do
@@ -204,12 +207,29 @@ local function frontPos()
 	return h and h.Position
 end
 local function xz(a, b) return math.sqrt((a.X - b.X) ^ 2 + (a.Z - b.Z) ^ 2) end
-local function carried()
+
+-- ===== status membawa unit: pakai atribut dari server, bukan model di client =====
+local function carryAttr()
+	local ch = LP.Character
+	local a = ch and ch:GetAttribute("BrainrotPickedUpKey")
+	if type(a) == "string" then return a end
+end
+local function carriedRaw()
 	local ch = LP.Character
 	if not ch then return nil end
 	local m = P(function() return BU:GetPickedUpBrainrot(ch) end)
 	if typeof(m) == "Instance" then return m end
 end
+local function carried()
+	if carryAttr() == nil then return nil end
+	return carriedRaw()
+end
+local function cleanStale()
+	local ch = LP.Character
+	P(function() BU:ClearAllCarryVisualState(ch) end)
+	P(function() BU:RequestSyncPlotUnits(LP) end)
+end
+
 local function unitCount()
 	local n = P(function() return BU:GetPlotUnitCount(LP) end)
 	return type(n) == "number" and n or -1
@@ -228,7 +248,23 @@ local function radiusOf(m)
 	return type(r) == "number" and r or 2.5
 end
 
+-- unit milik plot kita; hasil "bukan milik" hanya di-cache sebentar
 local mine = setmetatable({}, { __mode = "k" })
+local mineNo = setmetatable({}, { __mode = "k" })
+local function isMine(m)
+	if mine[m] then return true end
+	local t = mineNo[m]
+	if t and os.clock() - t < 1.5 then return false end
+	local ok = P(function() return BU:IsPlotUnitOnPlayerPlot(LP, m) end) == true
+	if ok then
+		mine[m] = true
+		mineNo[m] = nil
+	else
+		mineNo[m] = os.clock()
+	end
+	return ok
+end
+
 local pmC, pmT
 local function plotModels()
 	if pmC and os.clock() - pmT < 0.3 then return pmC.list, pmC.byKey end
@@ -237,11 +273,9 @@ local function plotModels()
 		if m:IsA("Model") and m.Parent
 			and not m:GetAttribute("PlotEffectClone") and not m:GetAttribute("MergeEffectClone") then
 			local k = m:GetAttribute("BrainrotKey")
-			if typeof(k) == "string" then
-				if mine[m] == nil then
-					mine[m] = P(function() return BU:IsPlotUnitOnPlayerPlot(LP, m) end) == true
-				end
-				if mine[m] then list[#list + 1] = m byKey[k] = m end
+			if typeof(k) == "string" and isMine(m) then
+				list[#list + 1] = m
+				byKey[k] = m
 			end
 		end
 	end
@@ -256,12 +290,27 @@ local function unitOf(inst)
 	end
 end
 
--- unit level tertinggi tidak punya level berikutnya -> tidak bisa merge
+-- unit level tertinggi tidak punya level berikutnya
 local function canPair(cid)
 	if not UM then return true end
 	local ok, nx = pcall(function() return UM:GetNextId(cid) end)
 	if ok and nx == nil then return false end
 	return true
+end
+
+-- CanMergePlotUnits (dipakai game sendiri saat unit dibawa), di-cache sebentar
+local cmCache, cmN = {}, 0
+local function canMergeKeys(a, b)
+	local key = tostring(a) .. "|" .. tostring(b)
+	local c = cmCache[key]
+	if c and os.clock() - c.t < 0.6 then return c.v end
+	local v = P(function() return BU:CanMergePlotUnits(LP, a, b) end) == true
+	cmN = cmN + 1
+	if cmN > 400 then
+		cmCache, cmN = {}, 0
+	end
+	cmCache[key] = { t = os.clock(), v = v }
+	return v
 end
 
 -- ===== urutan level (rendah dulu), di-cache =====
@@ -286,12 +335,15 @@ local function computeRanks(byKey)
 		local n = 1
 		while queue[n] and n < 400 do
 			local id = queue[n]
-			n += 1
+			n = n + 1
 			local nx = P(function() return UM:GetNextId(id) end)
 			if type(nx) == "string" and nx ~= id then
 				preds[nx] = preds[nx] or {}
 				table.insert(preds[nx], id)
-				if not known[nx] then known[nx] = true queue[#queue + 1] = nx end
+				if not known[nx] then
+					known[nx] = true
+					queue[#queue + 1] = nx
+				end
 			end
 		end
 		local memo = {}
@@ -320,7 +372,10 @@ local function getRanks(byKey)
 	local set, ids = {}, {}
 	for _, m in pairs(byKey) do
 		local id = m:GetAttribute("BrainrotId")
-		if type(id) == "string" and not set[id] then set[id] = true ids[#ids + 1] = id end
+		if type(id) == "string" and not set[id] then
+			set[id] = true
+			ids[#ids + 1] = id
+		end
 	end
 	table.sort(ids)
 	local sig = table.concat(ids, ",")
@@ -364,7 +419,7 @@ local function walkTo(pos, stopDist, timeout, abort, my)
 end
 
 -- ===== jalur yang menghindari unit lain =====
-local CLEAR = 2.0 -- lebar karakter + margin
+local CLEAR = 2.0
 
 local function hitInfo(m)
 	local hb = P(function() return BU:GetMergeHitbox(m) end)
@@ -399,7 +454,6 @@ end
 local function planPath(from, to, obs)
 	from = Vector3.new(from.X, 0, from.Z)
 	to = Vector3.new(to.X, 0, to.Z)
-	-- rintangan yang menutupi titik awal/tujuan tidak bisa dihindari, abaikan
 	local active = {}
 	for _, o in ipairs(obs) do
 		if (o.p - from).Magnitude > o.r and (o.p - to).Magnitude > o.r then
@@ -425,7 +479,7 @@ local function planPath(from, to, obs)
 				local function cost(c)
 					local pen = 0
 					for _, o in ipairs(active) do
-						if o ~= worst and (o.p - c).Magnitude < o.r then pen += 100 end
+						if o ~= worst and (o.p - c).Magnitude < o.r then pen = pen + 100 end
 					end
 					return (c - a).Magnitude + (b - c).Magnitude + pen
 				end
@@ -455,51 +509,62 @@ local function pickUp(m, my, v)
 	local pos = m:GetPivot().Position
 	setStep("jalan ke " .. short(key))
 	L(v, ("ambil %s (id=%s) | pos=(%.0f,%.0f,%.0f)"):format(short(key), tostring(m:GetAttribute("BrainrotId")), pos.X, pos.Y, pos.Z))
+	local function got() return carryAttr() ~= nil end
 	local function approach()
 		local r = hrpOf()
 		if not r then return end
 		local pts = planPath(r.Position, pos, obstaclesFor(m))
 		L(v, ("  jalur: %d titik"):format(#pts))
-		walkPath(pts, 10, function() return carried() ~= nil end, my)
+		walkPath(pts, 10, got, my)
 	end
 	approach()
 	local tries = 0
-	while not carried() and tries < 3 and live(my) do
-		tries += 1
+	while not got() and tries < 3 and live(my) do
+		tries = tries + 1
 		L(v, "  belum terambil, mundur lalu masuk lagi " .. tries)
 		local r = hrpOf()
 		if r then
 			local dir = Vector3.new(r.Position.X - pos.X, 0, r.Position.Z - pos.Z)
 			dir = dir.Magnitude > 0.1 and dir.Unit or Vector3.new(0, 0, 1)
-			walkTo(pos + dir * 4, 1.2, 3, function() return carried() ~= nil end, my)
+			walkTo(pos + dir * 4, 1.2, 3, got, my)
 		end
 		approach()
 		task.wait(0.1)
 	end
-	for _ = 1, 8 do
+	for _ = 1, 10 do
 		if carried() then break end
 		task.wait(0.1)
 	end
 	return carried()
 end
 
--- 2) target = unit sejenis terdekat (dengan stickiness)
+-- 2) target = unit sejenis yang benar-benar bisa di-merge (CanMerge=true), terdekat
 local function nearestSame(cm, ckey, cid, cur)
-	if not canPair(cid) then return nil end
+	if not canPair(cid) then return nil, true end
 	local list = plotModels()
 	local f = frontPos()
-	local best, bd
+	local best, bd, anySame
 	for _, m in ipairs(list) do
 		local k = m:GetAttribute("BrainrotKey")
 		if m ~= cm and k ~= ckey and m:GetAttribute("BrainrotId") == cid then
-			local d = f and xz(f, probeOf(m)) or 0
-			if not bd or d < bd then best, bd = m, d end
+			anySame = true
+			if canMergeKeys(ckey, k) then
+				local d = f and xz(f, probeOf(m)) or 0
+				if not bd or d < bd then best, bd = m, d end
+			end
 		end
 	end
 	if cur and cur.Parent and best and cur ~= best and f then
-		if xz(f, probeOf(cur)) <= bd + 4 then return cur end
+		local ck = cur:GetAttribute("BrainrotKey")
+		if canMergeKeys(ckey, ck) and xz(f, probeOf(cur)) <= bd + 4 then return cur, anySame end
 	end
-	return best
+	return best, anySame
+end
+
+local function noTargetReason(cid, anySame)
+	if not canPair(cid) then return "level tertinggi" end
+	if anySame then return "diblokir (rebirth/terkunci)" end
+	return "tanpa pasangan"
 end
 
 -- 3) jalan ke target; merge dengan unit sejenis mana pun yang tersentuh sah
@@ -524,16 +589,16 @@ local function goMerge(cm, ckey, cid, my, v)
 		return ok, tkeys, touches, why
 	end
 
-	local target
+	local target, noTargetSince
 	local t0, lastPick = os.clock(), 0
 	local inRangeSince, turns = nil, 0
 	setStep("cari target sejenis")
 	while os.clock() - t0 < 20 do
 		if not live(my) then return finish(false, "dibatalkan") end
-		if not carried() then return finish(true) end
+		if carryAttr() == nil then return finish(true) end
 		if os.clock() - lastPick > 0.5 then
 			lastPick = os.clock()
-			local nt = nearestSame(cm, ckey, cid, target)
+			local nt, anySame = nearestSame(cm, ckey, cid, target)
 			if nt ~= target then
 				target = nt
 				if target then
@@ -541,59 +606,90 @@ local function goMerge(cm, ckey, cid, my, v)
 					setStep("jalan ke target " .. short(target:GetAttribute("BrainrotKey")))
 				end
 			end
-		end
-		if not target then return finish(false, "tidak ada target sejenis") end
-		local pr = probeOf(target)
-		local f = frontPos()
-		local d = f and xz(f, pr) or 99
-		local R = radiusOf(cm) + radiusOf(target)
-		local h = humOf()
-		if not h then return finish(false, "tidak ada humanoid") end
-		if d <= R then
-			inRangeSince = inRangeSince or os.clock()
-			if os.clock() - inRangeSince > 1.2 then
-				turns += 1
-				say(("  dekat tapi belum merge (d=%.1f R=%.1f), mundur lalu masuk lagi #%d"):format(d, R, turns))
-				-- mundur lurus dari target lalu masuk lagi supaya sentuhan (Touched) terpicu ulang
-				local dir = Vector3.new(f.X - pr.X, 0, f.Z - pr.Z)
-				dir = dir.Magnitude > 0.1 and dir.Unit or Vector3.new(0, 0, 1)
-				local ang = ((turns % 2 == 1) and 1 or -1) * math.rad(35 * math.ceil(turns / 2))
-				local cs, sn = math.cos(ang), math.sin(ang)
-				local rot = Vector3.new(dir.X * cs - dir.Z * sn, 0, dir.X * sn + dir.Z * cs)
-				walkTo(pr + rot * (R + 4), 1, 3, function() return not carried() end, my)
-				inRangeSince = nil
+			if not target then
+				noTargetSince = noTargetSince or os.clock()
+				if os.clock() - noTargetSince > 1.2 then
+					return finish(false, noTargetReason(cid, anySame))
+				end
 			else
-				h:MoveTo(Vector3.new(pr.X, hrpOf() and hrpOf().Position.Y or pr.Y, pr.Z))
+				noTargetSince = nil
 			end
-		else
-			inRangeSince = nil
-			h:MoveTo(Vector3.new(pr.X, hrpOf() and hrpOf().Position.Y or pr.Y, pr.Z))
+		end
+		if target then
+			local pr = probeOf(target)
+			local f = frontPos()
+			local d = f and xz(f, pr) or 99
+			local R = radiusOf(cm) + radiusOf(target)
+			local h = humOf()
+			if not h then return finish(false, "tidak ada humanoid") end
+			local hr = hrpOf()
+			local y = hr and hr.Position.Y or pr.Y
+			if d <= R then
+				inRangeSince = inRangeSince or os.clock()
+				if os.clock() - inRangeSince > 1.2 then
+					turns = turns + 1
+					local tk = target:GetAttribute("BrainrotKey")
+					say(("  dekat tapi belum merge (d=%.1f R=%.1f canMerge=%s), mundur lalu masuk lagi #%d"):format(
+						d, R, tostring(canMergeKeys(ckey, tk)), turns))
+					if turns >= 5 then return finish(false, "sentuhan tidak memicu merge") end
+					local dir = f and Vector3.new(f.X - pr.X, 0, f.Z - pr.Z) or Vector3.new(0, 0, 1)
+					dir = dir.Magnitude > 0.1 and dir.Unit or Vector3.new(0, 0, 1)
+					local ang = ((turns % 2 == 1) and 1 or -1) * math.rad(35 * math.ceil(turns / 2))
+					local cs, sn = math.cos(ang), math.sin(ang)
+					local rot = Vector3.new(dir.X * cs - dir.Z * sn, 0, dir.X * sn + dir.Z * cs)
+					walkTo(pr + rot * (R + 4), 1, 3, function() return carryAttr() == nil end, my)
+					inRangeSince = nil
+				else
+					h:MoveTo(Vector3.new(pr.X, y, pr.Z))
+				end
+			else
+				inRangeSince = nil
+				h:MoveTo(Vector3.new(pr.X, y, pr.Z))
+			end
 		end
 		task.wait(0.1)
 	end
-	return finish(not carried(), "timeout 20 detik")
+	return finish(carryAttr() == nil, "timeout 20 detik")
 end
 
-env.AM_SKIP = {}
+-- ===== lepas unit =====
+local homePos
 
--- lepas unit: coba sampai 3x (server bisa menahan drop sebentar), lalu menjauh
-local function dropAndLeave(my, v)
+local function dropAndLeave(my)
 	setStep("DropOff")
-	for attempt = 1, 3 do
+	if carryAttr() == nil then
+		if carriedRaw() then
+			say("  sisa visual unit, dibersihkan")
+			cleanStale()
+		end
+		return true
+	end
+	for attempt = 1, 4 do
 		local okd, rd = invoke(6, "DropOff")
-		L(true, ("  DropOff #%d ok=%s r=%s"):format(attempt, tostring(okd), tostring(rd)))
 		local t0 = os.clock()
-		while os.clock() - t0 < 1.5 and carried() do task.wait(0.1) end
-		if not carried() then
-			drops += 1
+		while os.clock() - t0 < 1.5 and carryAttr() do task.wait(0.1) end
+		local a = carryAttr()
+		say(("  DropOff #%d ok=%s r=%s | attr=%s model=%s"):format(
+			attempt, tostring(okd), tostring(rd), a and short(a) or "nil", carriedRaw() and "ada" or "nil"))
+		if not a then
+			drops = drops + 1
+			if carriedRaw() then
+				say("  sisa visual unit, dibersihkan")
+				cleanStale()
+			end
 			local h = hrpOf()
 			if h then walkTo(h.Position - h.CFrame.LookVector * 6, 1.5, 3, nil, my) end
 			return true
 		end
-		task.wait(1.2)
+		if attempt == 2 and homePos then
+			setStep("ke titik awal")
+			walkTo(homePos, 3, 6, nil, my)
+			setStep("DropOff")
+		end
+		task.wait(1.0)
 		if not alive(my) then return false end
 	end
-	say("  unit MASIH terbawa setelah 3x DropOff")
+	say("  unit MASIH terbawa setelah 4x DropOff")
 	return false
 end
 
@@ -610,7 +706,7 @@ local function queueVerify(item)
 				local it = vq[i]
 				local gone = it.hadRec and getRec(it.ckey) == nil
 				if gone or (n ~= -1 and it.before ~= -1 and n < it.before) then
-					total += 1
+					total = total + 1
 					table.remove(vq, i)
 				elseif now - it.t0 > 8 then
 					say(("perhatian: %s belum terverifikasi (unit %s -> %s)"):format(short(it.ckey), tostring(it.before), tostring(n)))
@@ -626,7 +722,16 @@ end
 -- ===== satu siklus. return: ok, alasan, fatal, soft =====
 local function cycle(mA, my, v, sync)
 	local before = unitCount()
+	if carryAttr() == nil and carriedRaw() then
+		say("  ada sisa visual unit, dibersihkan")
+		cleanStale()
+		task.wait(0.3)
+	end
 	local cm = carried()
+	if not cm and carryAttr() then
+		say("  server mencatat ada unit terbawa tapi modelnya tidak ada, dilepas")
+		if not dropAndLeave(my) then return false, "unit terbawa tidak bisa dilepas", true end
+	end
 	local fresh = false
 	if not cm then
 		if not (mA and mA.Parent) then return false, "unit hilang", false, true end
@@ -636,18 +741,27 @@ local function cycle(mA, my, v, sync)
 	end
 
 	local ckey, cid = cm:GetAttribute("BrainrotKey"), cm:GetAttribute("BrainrotId")
+	if type(ckey) ~= "string" then ckey = carryAttr() or "?" end
 	local intended = mA and mA:GetAttribute("BrainrotKey")
 	if fresh and intended and ckey ~= intended then
-		wrong += 1
+		wrong = wrong + 1
 		say(("  salah ambil: %s (id=%s), niat %s"):format(short(ckey), tostring(cid), short(intended)))
 	end
 
-	if not nearestSame(cm, ckey, cid, nil) then
-		local tag = canPair(cid) and "tanpa pasangan" or "level tertinggi, tidak bisa merge"
-		say(("  membawa %s: %s, dilepas"):format(short(ckey), tag))
+	-- cek target yang valid; beri jeda karena CanMerge bisa telat sesaat setelah terambil
+	local tgt, anySame = nearestSame(cm, ckey, cid, nil)
+	local tw = os.clock()
+	while not tgt and os.clock() - tw < 1.2 and alive(my) do
+		task.wait(0.15)
+		tgt, anySame = nearestSame(cm, ckey, cid, nil)
+	end
+	if not tgt then
+		local why = noTargetReason(cid, anySame)
+		say(("  membawa %s: %s, dilepas"):format(short(ckey), why))
 		env.AM_SKIP[ckey] = os.clock() + 60
-		if not dropAndLeave(my, v) then return false, "unit terbawa tidak bisa dilepas", true end
-		return false, tag, false, true
+		if why ~= "tanpa pasangan" then env.AM_IDSKIP[cid] = os.clock() + 90 end
+		if not dropAndLeave(my) then return false, "unit terbawa tidak bisa dilepas", true end
+		return false, why, false, true
 	end
 
 	local hadRec = getRec(ckey) ~= nil
@@ -659,10 +773,13 @@ local function cycle(mA, my, v, sync)
 		if why == "dibatalkan" then return false, why end
 		say(("  merge tidak terjadi (%s)"):format(tostring(why)))
 		env.AM_SKIP[ckey] = os.clock() + 60
-		if carried() then
-			if not dropAndLeave(my, v) then return false, "unit terbawa tidak bisa dilepas", true end
+		local blocked = type(why) == "string" and (why == "level tertinggi" or why:find("diblokir") ~= nil)
+		if blocked then env.AM_IDSKIP[cid] = os.clock() + 90 end
+		if carryAttr() then
+			if not dropAndLeave(my) then return false, "unit terbawa tidak bisa dilepas", true end
 		end
-		return false, why
+		local soft = blocked or why == "tanpa pasangan"
+		return false, why, false, soft
 	end
 
 	env.AM_SKIP[ckey] = os.clock() + 3
@@ -672,11 +789,14 @@ local function cycle(mA, my, v, sync)
 		local t0, okv, n = os.clock(), false, -1
 		while os.clock() - t0 < 8 do
 			n = unitCount()
-			if (hadRec and getRec(ckey) == nil) or (n ~= -1 and before ~= -1 and n < before) then okv = true break end
+			if (hadRec and getRec(ckey) == nil) or (n ~= -1 and before ~= -1 and n < before) then
+				okv = true
+				break
+			end
 			task.wait(0.25)
 		end
 		L(true, ("  verifikasi: %s (t+%.1fs, unit %s -> %s)"):format(okv and "OK" or "BELUM", os.clock() - t0, tostring(before), tostring(n)))
-		if okv then total += 1 end
+		if okv then total = total + 1 end
 		return okv, okv and nil or "belum terverifikasi"
 	end
 	queueVerify({ ckey = ckey, hadRec = hadRec, before = before, t0 = os.clock() })
@@ -690,14 +810,18 @@ local function nextCandidate()
 	local ranks, how = getRanks(byKey)
 	local r = hrpOf()
 	local best, bs, bestRank
+	local now = os.clock()
 	for _, pr in ipairs(ps) do
 		for _, k in ipairs(pr) do
 			local m = byKey[k]
-			if m and (env.AM_SKIP[k] or 0) < os.clock() and getRec(k) then
-				local rk = ranks[m:GetAttribute("BrainrotId")] or 0
-				local d = r and (m:GetPivot().Position - r.Position).Magnitude or 0
-				local score = rk * 100000 + d
-				if not bs or score < bs then best, bs, bestRank = m, score, rk end
+			if m and (env.AM_SKIP[k] or 0) < now then
+				local id = m:GetAttribute("BrainrotId")
+				if (env.AM_IDSKIP[id] or 0) < now and getRec(k) then
+					local rk = ranks[id] or 0
+					local d = r and (m:GetPivot().Position - r.Position).Magnitude or 0
+					local score = rk * 100000 + d
+					if not bs or score < bs then best, bs, bestRank = m, score, rk end
+				end
 			end
 		end
 	end
@@ -725,7 +849,9 @@ local function startWatchdog(my)
 			if h and (not lastPos or (h.Position - lastPos).Magnitude > 1.5) then
 				lastPos, lastMove = h.Position, os.clock()
 			end
-			if step:sub(1, 7) == "menunggu" or step == "DropOff" then lastMove = os.clock() end
+			if step:find("^menunggu") or step:find("^DropOff") or step:find("^ke titik") then
+				lastMove = os.clock()
+			end
 			if os.clock() - lastMove > 6 then
 				say(('WATCHDOG: macet di "%s", siklus dibatalkan'):format(step))
 				abortCycle = true
@@ -736,7 +862,7 @@ local function startWatchdog(my)
 end
 
 local function setOn(on)
-	token += 1
+	token = token + 1
 	local my = token
 	env.AM_ON = on
 	abortCycle = false
@@ -748,6 +874,8 @@ local function setOn(on)
 		return
 	end
 	busy = true
+	local h0 = hrpOf()
+	homePos = h0 and h0.Position or nil
 	startWatchdog(my)
 	task.spawn(function()
 		local fails, lastRank = 0, nil
@@ -755,7 +883,7 @@ local function setOn(on)
 			abortCycle = false
 			setStep("cari unit")
 			local cand, n, _, _, rk = nextCandidate()
-			if not cand and not carried() then
+			if not cand and not carryAttr() then
 				setStep("menunggu pasangan (pairs=" .. n .. ")")
 				task.wait(0.1)
 			else
@@ -771,14 +899,17 @@ local function setOn(on)
 					abortCycle = false
 					if cand then env.AM_SKIP[cand:GetAttribute("BrainrotKey")] = os.clock() + 10 end
 				else
-					fails += 1
+					fails = fails + 1
 					if cand then env.AM_SKIP[cand:GetAttribute("BrainrotKey")] = os.clock() + 15 end
 					say("gagal: " .. tostring(why))
 					if fatal then
 						say("STOP: ada unit terbawa yang tidak bisa dilepas. Lepas manual, lalu ON lagi.")
 						break
 					end
-					if fails >= 6 then say("gagal 6x berturut, stop") break end
+					if fails >= 6 then
+						say("gagal 6x berturut, stop")
+						break
+					end
 				end
 				task.wait()
 			end
@@ -793,18 +924,51 @@ local function setOn(on)
 end
 toggle.Activated:Connect(function() setOn(not env.AM_ON) end)
 
-mkBtn("Test 1x", 0, 0.25, 92, 28, function()
+-- info diagnosis
+local function info()
+	local a, m = carryAttr(), carriedRaw()
+	say(("INFO | attr=%s model=%s unit=%s pairs=%d"):format(
+		a and short(a) or "nil", m and m.Name or "nil", tostring(unitCount()), #getPairs()))
+	local _, byKey = plotModels()
+	local ranks = getRanks(byKey)
+	say("level: " .. rankText(ranks))
+	local counts = {}
+	for k, mm in pairs(byKey) do
+		local id = tostring(mm:GetAttribute("BrainrotId"))
+		counts[id] = counts[id] or { n = 0, ok = 0 }
+		counts[id].n = counts[id].n + 1
+		local rec = getRec(k)
+		if rec and P(function() return BU:IsAutoMergeablePlotUnit(rec, LP) end) then
+			counts[id].ok = counts[id].ok + 1
+		end
+	end
+	for id, c in pairs(counts) do
+		say(("  %s: %d unit, %d bisa auto-merge"):format(id, c.n, c.ok))
+	end
+	if m then
+		local ck, cid = m:GetAttribute("BrainrotKey"), m:GetAttribute("BrainrotId")
+		for _, mm in ipairs((plotModels())) do
+			if mm ~= m and mm:GetAttribute("BrainrotId") == cid then
+				local tk = mm:GetAttribute("BrainrotKey")
+				say(("  target %s canMerge=%s"):format(short(tk), tostring(canMergeKeys(ck, tk))))
+			end
+		end
+	end
+end
+
+mkBtn("Test", 0, 0.2, 92, 28, function()
 	if busy then status.Text = "sedang jalan, tap Reset dulu" return end
-	token += 1
+	token = token + 1
 	local my = token
 	abortCycle = false
 	busy = true
 	task.spawn(function()
 		local cand, n, ranks, how, rk = nextCandidate()
 		local h = hrpOf()
+		homePos = h and h.Position or nil
 		say(("TEST | pairs=%d unit=%s | karakter=%s"):format(n, tostring(unitCount()), tostring(h and h.Position)))
 		say(("urutan level [%s]: %s"):format(how, rankText(ranks)))
-		if not cand and not carried() then
+		if not cand and not carryAttr() then
 			say("tidak ada unit yang bisa dites")
 		else
 			if cand then
@@ -813,21 +977,33 @@ mkBtn("Test 1x", 0, 0.25, 92, 28, function()
 			local ok, why = cycle(cand, my, true, true)
 			say(ok and ">>> TEST BERHASIL" or (">>> TEST GAGAL: " .. tostring(why)))
 		end
-		if alive(my) then busy = false setStep("selesai") status.Text = ("selesai | merged:%d salah:%d drop:%d"):format(total, wrong, drops) end
+		if alive(my) then
+			busy = false
+			setStep("selesai")
+			status.Text = ("selesai | merged:%d salah:%d drop:%d"):format(total, wrong, drops)
+		end
 	end)
 end)
-mkBtn("Copy", 0.25, 0.25, 92, 28, function(b)
+mkBtn("Info", 0.2, 0.2, 92, 28, function()
+	local ok, e = pcall(info)
+	if not ok then say("ERROR info: " .. tostring(e)) end
+end)
+mkBtn("Copy", 0.4, 0.2, 92, 28, function(b)
 	local cb = setclipboard or toclipboard or set_clipboard
 	if cb and pcall(cb, table.concat(lines, "\n")) then b.Text = "Copied!" else b.Text = "Tap-tahan" end
 	task.delay(1.2, function() b.Text = "Copy" end)
 end)
-mkBtn("Clear", 0.5, 0.25, 92, 28, function() lines = {} out.Text = "" end)
-mkBtn("Reset", 0.75, 0.25, 92, 28, function()
-	token += 1
+mkBtn("Clear", 0.6, 0.2, 92, 28, function()
+	lines = {}
+	out.Text = ""
+end)
+mkBtn("Reset", 0.8, 0.2, 92, 28, function()
+	token = token + 1
 	env.AM_ON = false
 	busy = false
 	abortCycle = false
 	env.AM_SKIP = {}
+	env.AM_IDSKIP = {}
 	setBtn(false)
 	stopWalking()
 	setStep("di-reset")
@@ -845,13 +1021,20 @@ xb.TextSize = 13
 xb.Text = "X"
 xb.Parent = bar
 Instance.new("UICorner", xb).CornerRadius = UDim.new(0, 4)
-xb.Activated:Connect(function() token += 1 env.AM_ON = false stopWalking() gui:Destroy() end)
+xb.Activated:Connect(function()
+	token = token + 1
+	env.AM_ON = false
+	stopWalking()
+	gui:Destroy()
+end)
 
 local drag, ds, sp
 bar.InputBegan:Connect(function(i)
 	if i.UserInputType == Enum.UserInputType.Touch or i.UserInputType == Enum.UserInputType.MouseButton1 then
 		drag, ds, sp = true, i.Position, win.Position
-		i.Changed:Connect(function() if i.UserInputState == Enum.UserInputState.End then drag = false end end)
+		i.Changed:Connect(function()
+			if i.UserInputState == Enum.UserInputState.End then drag = false end
+		end)
 	end
 end)
 UIS.InputChanged:Connect(function(i)
@@ -861,10 +1044,10 @@ UIS.InputChanged:Connect(function(i)
 	end
 end)
 
-say("siap. tap ON (atau Test 1x dulu, jangan sentuh joystick)")
+say("siap. tap ON (atau Test dulu, jangan sentuh joystick)")
 
 -- ===== OPASITAS HUD =====
-local OPACITY = 0.10 -- 0.10 = 10% opak
+local OPACITY = 0.10
 
 local bgList = {}
 local function collect()
@@ -905,12 +1088,12 @@ local function opBtn(text, xoff, delta)
 	b.Activated:Connect(function()
 		OPACITY = math.clamp(math.floor((OPACITY + delta) * 100 + 0.5) / 100, 0.05, 1)
 		applyOpacity()
-		bar.Text = ("  Auto Merge v11 | opasitas %d%%"):format(math.floor(OPACITY * 100 + 0.5))
+		bar.Text = ("  Auto Merge v12 | opasitas %d%%"):format(math.floor(OPACITY * 100 + 0.5))
 	end)
 end
-opBtn("+", -90, 0.1)  -- lebih pekat
-opBtn("-", -60, -0.1) -- lebih transparan
+opBtn("+", -90, 0.1)
+opBtn("-", -60, -0.1)
 
 collect()
 applyOpacity()
-bar.Text = "  Auto Merge v11 | opasitas 10%"
+bar.Text = "  Auto Merge v12 | opasitas 10%"
