@@ -1,4 +1,4 @@
--- Auto Merge v13
+-- Auto Merge v14
 local env = getgenv()
 local RS  = game:GetService("ReplicatedStorage")
 local CS  = game:GetService("CollectionService")
@@ -15,127 +15,193 @@ local function live(my) return alive(my) and not abortCycle end
 env.AM_SKIP = {}
 env.AM_IDSKIP = {}
 
--- ===== GUI =====
+-- ===== GUI minimalis =====
 local root = LP:WaitForChild("PlayerGui")
 pcall(function() if gethui then root = gethui() end end)
 for _, p in ipairs({ root, LP.PlayerGui }) do
-	for _, n in ipairs({ "AM13", "AM12", "AM11", "AM10", "AM9", "AM8", "AM7", "AM6", "AM5", "AM4", "AM3", "AM2", "Rec", "Probe", "SrcScan", "SimpleSpy", "AutoMergeHUD", "MergeSpyHUD" }) do
+	for _, n in ipairs({ "AM14", "AM13", "AM12", "AM11", "AM10", "AM9", "AM8", "AM7", "AM6", "AM5", "AM4", "AM3", "AM2", "Rec", "Probe", "SrcScan", "SimpleSpy", "AutoMergeHUD", "MergeSpyHUD" }) do
 		pcall(function() p[n]:Destroy() end)
 	end
 end
 local gui = Instance.new("ScreenGui")
-gui.Name, gui.ResetOnSpawn, gui.DisplayOrder = "AM13", false, 999
+gui.Name, gui.ResetOnSpawn, gui.DisplayOrder = "AM14", false, 999
 gui.Parent = root
 
-local win = Instance.new("Frame")
-win.Size = UDim2.new(0.58, 0, 0.62, 0)
-win.Position = UDim2.new(0.02, 0, 0.22, 0)
-win.BackgroundColor3 = Color3.fromRGB(18, 18, 22)
-win.BorderSizePixel = 0
-win.Parent = gui
-Instance.new("UICorner", win).CornerRadius = UDim.new(0, 8)
-
-local bar = Instance.new("TextLabel")
-bar.Size = UDim2.new(1, 0, 0, 26)
-bar.BackgroundColor3 = Color3.fromRGB(35, 35, 45)
-bar.BorderSizePixel = 0
-bar.TextColor3 = Color3.new(1, 1, 1)
-bar.Font = Enum.Font.GothamBold
-bar.TextSize = 13
-bar.TextXAlignment = Enum.TextXAlignment.Left
-bar.Text = "  Auto Merge v13 (geser di sini)"
-bar.Parent = win
-Instance.new("UICorner", bar).CornerRadius = UDim.new(0, 8)
-
-local function mkBtn(text, x, w, y, h, cb)
+local C = {
+	bg = Color3.fromRGB(15, 17, 23),
+	bg2 = Color3.fromRGB(27, 31, 42),
+	line = Color3.fromRGB(58, 66, 86),
+	text = Color3.fromRGB(232, 236, 244),
+	dim = Color3.fromRGB(135, 146, 166),
+	acc = Color3.fromRGB(64, 224, 176),
+	off = Color3.fromRGB(236, 100, 114),
+}
+local OPACITY = 0.85
+local tracked = {}
+local function track(o, prop, base) tracked[#tracked + 1] = { o, prop, base } end
+local function applyOpacity()
+	for _, t in ipairs(tracked) do
+		if t[1].Parent then t[1][t[2]] = 1 - t[3] * OPACITY end
+	end
+end
+local function corner(o, r)
+	local c = Instance.new("UICorner")
+	c.CornerRadius = UDim.new(0, r)
+	c.Parent = o
+end
+local function stroke(o, col, base)
+	local s = Instance.new("UIStroke")
+	s.Color, s.Thickness, s.ApplyStrokeMode = col, 1, Enum.ApplyStrokeMode.Border
+	s.Parent = o
+	track(s, "Transparency", base)
+	return s
+end
+local function box(parent, x, y, w, h, col, base)
+	local f = Instance.new("Frame")
+	f.Position, f.Size = UDim2.new(0, x, 0, y), UDim2.new(0, w, 0, h)
+	f.BackgroundColor3, f.BorderSizePixel = col, 0
+	f.Parent = parent
+	track(f, "BackgroundTransparency", base)
+	return f
+end
+local function label(parent, text, x, y, w, h, size, col, align)
+	local l = Instance.new("TextLabel")
+	l.Position, l.Size = UDim2.new(0, x, 0, y), UDim2.new(0, w, 0, h)
+	l.BackgroundTransparency = 1
+	l.Text, l.TextSize, l.TextColor3 = text, size, col
+	l.Font = Enum.Font.GothamMedium
+	l.TextXAlignment = align or Enum.TextXAlignment.Left
+	l.TextTruncate = Enum.TextTruncate.AtEnd
+	l.TextStrokeTransparency = 0.75
+	l.Parent = parent
+	return l
+end
+local function button(parent, text, x, y, w, h, col, base, size, tcol)
 	local b = Instance.new("TextButton")
-	b.Size = UDim2.new(w, -4, 0, h)
-	b.Position = UDim2.new(x, 2, 0, y)
-	b.BackgroundColor3 = Color3.fromRGB(55, 55, 70)
-	b.BorderSizePixel = 0
-	b.TextColor3 = Color3.new(1, 1, 1)
+	b.Position, b.Size = UDim2.new(0, x, 0, y), UDim2.new(0, w, 0, h)
+	b.BackgroundColor3, b.BorderSizePixel, b.AutoButtonColor = col, 0, false
+	b.Text, b.TextSize, b.TextColor3 = text, size or 13, tcol or C.text
 	b.Font = Enum.Font.GothamMedium
-	b.TextSize = 13
-	b.Text = text
-	b.Parent = win
-	Instance.new("UICorner", b).CornerRadius = UDim.new(0, 5)
-	b.Activated:Connect(function() cb(b) end)
+	b.TextStrokeTransparency = 0.75
+	b.Parent = parent
+	track(b, "BackgroundTransparency", base)
+	corner(b, 6)
 	return b
 end
 
-local toggle = mkBtn("OFF", 0, 1, 30, 38, function() end)
-toggle.Size = UDim2.new(1, -8, 0, 38)
-toggle.Position = UDim2.new(0, 4, 0, 30)
-toggle.TextSize = 18
-toggle.BackgroundColor3 = Color3.fromRGB(150, 50, 50)
-toggle.TextColor3 = Color3.fromRGB(255, 120, 120)
+-- panel
+local win = Instance.new("Frame")
+win.Size = UDim2.new(0, 224, 0, 196)
+win.Position = UDim2.new(0, 16, 0.3, 0)
+win.BackgroundColor3, win.BorderSizePixel, win.Active = C.bg, 0, true
+win.Parent = gui
+track(win, "BackgroundTransparency", 1)
+corner(win, 10)
+stroke(win, C.line, 0.9)
+do
+	local g = Instance.new("UIGradient")
+	g.Color = ColorSequence.new(Color3.fromRGB(255, 255, 255), Color3.fromRGB(190, 200, 225))
+	g.Rotation = 35
+	g.Parent = win
+end
 
-local status = Instance.new("TextLabel")
-status.Size = UDim2.new(1, -8, 0, 18)
-status.Position = UDim2.new(0, 4, 0, 70)
-status.BackgroundTransparency = 1
-status.TextColor3 = Color3.fromRGB(180, 220, 255)
-status.Font = Enum.Font.Code
-status.TextSize = 12
-status.TextXAlignment = Enum.TextXAlignment.Left
-status.Text = "siap"
-status.Parent = win
+local head = Instance.new("Frame")
+head.Size, head.BackgroundTransparency = UDim2.new(1, 0, 0, 34), 1
+head.Parent = win
+local logo = box(head, 14, 11, 12, 12, C.acc, 1)
+logo.Rotation = 45
+label(head, "AUTO MERGE", 36, 0, 110, 34, 12, C.text).Font = Enum.Font.GothamBold
+local minBtn = button(head, "–", 158, 6, 26, 22, C.bg2, 0.9, 14, C.dim)
+local closeBtn = button(head, "×", 188, 6, 26, 22, C.bg2, 0.9, 16, C.off)
+box(win, 12, 34, 200, 1, C.line, 0.8)
 
-local scroll = Instance.new("ScrollingFrame")
-scroll.Position = UDim2.new(0, 4, 0, 154)
-scroll.Size = UDim2.new(1, -8, 1, -158)
-scroll.BackgroundColor3 = Color3.fromRGB(10, 10, 14)
-scroll.BorderSizePixel = 0
-scroll.ScrollBarThickness = 4
-scroll.CanvasSize = UDim2.new()
-scroll.AutomaticCanvasSize = Enum.AutomaticSize.Y
-scroll.Parent = win
+-- toggle
+local toggle = button(win, "OFF", 12, 46, 200, 44, C.bg2, 1, 18, C.off)
+toggle.Font = Enum.Font.GothamBold
+local togStroke = stroke(toggle, C.line, 0.9)
+local status = label(win, "siap", 12, 94, 200, 16, 11, C.dim, Enum.TextXAlignment.Center)
 
-local out = Instance.new("TextBox")
-out.Size = UDim2.new(1, -6, 0, 0)
-out.Position = UDim2.new(0, 3, 0, 0)
-out.AutomaticSize = Enum.AutomaticSize.Y
-out.BackgroundTransparency = 1
-out.TextColor3 = Color3.fromRGB(220, 220, 220)
-out.Font = Enum.Font.Code
-out.TextSize = 11
-out.TextXAlignment = Enum.TextXAlignment.Left
-out.TextYAlignment = Enum.TextYAlignment.Top
-out.TextWrapped = true
-out.MultiLine = true
-out.ClearTextOnFocus = false
-out.TextEditable = false
-out.Text = ""
-out.Parent = scroll
+-- mode
+local modeBtns = {}
+local function paintModes(m)
+	for k, b in pairs(modeBtns) do
+		local on = k == m
+		b.BackgroundColor3 = on and C.acc or C.bg2
+		b.TextColor3 = on and C.bg or C.dim
+	end
+end
+do
+	local defs = { { "walk", "Manual", 12 }, { "tele", "Semi Auto", 80 }, { "full", "Auto", 148 } }
+	for _, d in ipairs(defs) do
+		local b = button(win, d[2], d[3], 118, 64, 28, C.bg2, 0.9, 11, C.dim)
+		modeBtns[d[1]] = b
+	end
+end
 
-local lines, dirtyLog = {}, false
+-- opacity
+label(win, "Opacity", 12, 156, 80, 28, 12, C.dim)
+local opMinus = button(win, "−", 104, 156, 32, 28, C.bg2, 0.9, 16, C.text)
+local opVal = label(win, "85%", 138, 156, 40, 28, 12, C.text, Enum.TextXAlignment.Center)
+local opPlus = button(win, "+", 180, 156, 32, 28, C.bg2, 0.9, 16, C.text)
+
+-- orb (mode minimize)
+local orb = Instance.new("TextButton")
+orb.Size, orb.Position = UDim2.new(0, 46, 0, 46), win.Position
+orb.Text, orb.AutoButtonColor, orb.BorderSizePixel = "", false, 0
+orb.BackgroundColor3 = C.bg
+orb.Visible = false
+orb.Parent = gui
+track(orb, "BackgroundTransparency", 1)
+corner(orb, 23)
+local orbStroke = stroke(orb, C.line, 1)
+local orbDot = Instance.new("Frame")
+orbDot.AnchorPoint, orbDot.Position, orbDot.Size = Vector2.new(0.5, 0.5), UDim2.new(0.5, 0, 0.5, 0), UDim2.new(0, 14, 0, 14)
+orbDot.Rotation, orbDot.BorderSizePixel, orbDot.BackgroundColor3 = 45, 0, C.dim
+orbDot.Parent = orb
+
+local function draggable(handle, target, onTap)
+	local dragging, start, orig, moved = false, nil, nil, 0
+	handle.InputBegan:Connect(function(i)
+		if i.UserInputType == Enum.UserInputType.Touch or i.UserInputType == Enum.UserInputType.MouseButton1 then
+			dragging, start, orig, moved = true, i.Position, target.Position, 0
+			i.Changed:Connect(function()
+				if i.UserInputState == Enum.UserInputState.End then
+					dragging = false
+					if onTap and moved < 8 then onTap() end
+				end
+			end)
+		end
+	end)
+	UIS.InputChanged:Connect(function(i)
+		if dragging and (i.UserInputType == Enum.UserInputType.Touch or i.UserInputType == Enum.UserInputType.MouseMovement) then
+			local d = i.Position - start
+			moved = math.max(moved, d.Magnitude)
+			target.Position = UDim2.new(orig.X.Scale, orig.X.Offset + d.X, orig.Y.Scale, orig.Y.Offset + d.Y)
+		end
+	end)
+end
+
+-- log internal (tidak ditampilkan; env.AM_LOG untuk debug)
+local lines = {}
+env.AM_LOG = lines
 local function say(s)
 	lines[#lines + 1] = os.date("%H:%M:%S ") .. tostring(s)
-	if #lines > 500 then table.remove(lines, 1) end
-	dirtyLog = true
+	if #lines > 300 then table.remove(lines, 1) end
 end
 local function L(v, s) if v then say(s) end end
-task.spawn(function()
-	while gui.Parent and env.AM_GEN == gen do
-		task.wait(0.4)
-		if dirtyLog then
-			dirtyLog = false
-			out.Text = table.concat(lines, "\n")
-			scroll.CanvasPosition = Vector2.new(0, 1e7)
-		end
-	end
-end)
+
 
 -- ===== status =====
 local busy, step, stepT = false, "siap", os.clock()
 local total, wrong, drops = 0, 0, 0
-local mode, verbose, fullFail = "walk", true, 0
-local MODENAME = { walk = "JALAN", tele = "TELE", full = "FULL" }
+local mode, verbose, fullFail = env.AM_MODE or "full", env.AM_DEBUG == true, 0
+local MODENAME = { walk = "MANUAL", tele = "SEMI", full = "AUTO" }
+paintModes(mode)
 local function setStep(s) step, stepT = s, os.clock() end
 task.spawn(function()
 	while gui.Parent and env.AM_GEN == gen do
 		if busy then
-			status.Text = ("[%s] %s (%.0fs) | merged:%d salah:%d drop:%d"):format(MODENAME[mode], step, os.clock() - stepT, total, wrong, drops)
+			status.Text = ("%s  ·  %d merge"):format(step, total)
 		end
 		task.wait(0.5)
 	end
@@ -233,7 +299,6 @@ local function cleanStale()
 end
 
 -- ===== log gerakan =====
-local modeBtn
 local goal
 local function mv(s) if verbose then say(s) end end
 local function fmt(v) return v and ("(%.0f,%.0f,%.0f)"):format(v.X, v.Y, v.Z) or "nil" end
@@ -244,7 +309,8 @@ local function argstr(t)
 end
 local function setMode(m)
 	mode, fullFail = m, 0
-	if modeBtn then modeBtn.Text = "Mode: " .. MODENAME[m] end
+	env.AM_MODE = m
+	paintModes(m)
 	say("MODE -> " .. MODENAME[m])
 end
 -- pencatat posisi/kecepatan/tujuan tiap 1.5 detik saat berjalan
@@ -1044,8 +1110,12 @@ end
 -- ===== kontrol =====
 local function setBtn(on)
 	toggle.Text = on and "ON" or "OFF"
-	toggle.BackgroundColor3 = on and Color3.fromRGB(40, 150, 70) or Color3.fromRGB(150, 50, 50)
-	toggle.TextColor3 = on and Color3.fromRGB(120, 255, 150) or Color3.fromRGB(255, 120, 120)
+	toggle.BackgroundColor3 = on and C.acc or C.bg2
+	toggle.TextColor3 = on and C.bg or C.off
+	togStroke.Color = on and C.acc or C.line
+	orbDot.BackgroundColor3 = on and C.acc or C.dim
+	orbStroke.Color = on and C.acc or C.line
+	if not on then status.Text = "siap" end
 end
 local function stopWalking()
 	local h, r = humOf(), hrpOf()
@@ -1091,7 +1161,7 @@ local function setOn(on)
 	homePos = h0 and h0.Position or nil
 	startWatchdog(my)
 	task.spawn(function()
-		local fails, lastRank = 0, nil
+		local fails, lastRank, stopMsg = 0, nil, nil
 		while env.AM_ON and alive(my) do
 			abortCycle = false
 			setStep("cari unit")
@@ -1119,10 +1189,12 @@ local function setOn(on)
 					say("gagal: " .. tostring(why))
 					if fatal then
 						say("STOP: ada unit terbawa yang tidak bisa dilepas. Lepas manual, lalu ON lagi.")
+						stopMsg = "berhenti: unit terbawa nyangkut"
 						break
 					end
 					if fails >= 6 then
 						say("gagal 6x berturut, stop")
+						stopMsg = "berhenti: gagal berulang"
 						break
 					end
 				end
@@ -1134,188 +1206,53 @@ local function setOn(on)
 			busy = false
 			setBtn(false)
 			setStep("selesai")
+			status.Text = stopMsg or "selesai"
 		end
 	end)
 end
 toggle.Activated:Connect(function() setOn(not env.AM_ON) end)
 
--- info diagnosis
-local function info()
-	local a, m = carryAttr(), carriedRaw()
-	say(("INFO | attr=%s model=%s unit=%s pairs=%d"):format(
-		a and short(a) or "nil", m and m.Name or "nil", tostring(unitCount()), #getPairs()))
-	local _, byKey = plotModels()
-	local ranks = getRanks(byKey)
-	say("level: " .. rankText(ranks))
-	local counts = {}
-	for k, mm in pairs(byKey) do
-		local id = tostring(mm:GetAttribute("BrainrotId"))
-		counts[id] = counts[id] or { n = 0, ok = 0 }
-		counts[id].n = counts[id].n + 1
-		local rec = getRec(k)
-		if rec and P(function() return BU:IsAutoMergeablePlotUnit(rec, LP) end) then
-			counts[id].ok = counts[id].ok + 1
-		end
-	end
-	for id, c in pairs(counts) do
-		say(("  %s: %d unit, %d bisa auto-merge"):format(id, c.n, c.ok))
-	end
-	if m then
-		local ck, cid = m:GetAttribute("BrainrotKey"), m:GetAttribute("BrainrotId")
-		for _, mm in ipairs((plotModels())) do
-			if mm ~= m and mm:GetAttribute("BrainrotId") == cid then
-				local tk = mm:GetAttribute("BrainrotKey")
-				say(("  target %s canMerge=%s"):format(short(tk), tostring(canMergeKeys(ck, tk))))
-			end
-		end
-	end
+
+
+for m, b in pairs(modeBtns) do
+	b.Activated:Connect(function() setMode(m) end)
 end
 
-mkBtn("Test", 0, 0.2, 92, 28, function()
-	if busy then status.Text = "sedang jalan, tap Reset dulu" return end
-	token = token + 1
-	local my = token
-	abortCycle = false
-	busy = true
-	task.spawn(function()
-		local cand, n, ranks, how, rk = nextCandidate()
-		local h = hrpOf()
-		homePos = h and h.Position or nil
-		say(("TEST | pairs=%d unit=%s | karakter=%s"):format(n, tostring(unitCount()), tostring(h and h.Position)))
-		say(("urutan level [%s]: %s"):format(how, rankText(ranks)))
-		if not cand and not carryAttr() then
-			say("tidak ada unit yang bisa dites")
-		else
-			if cand then
-				say(("dipilih: %s (level %s)"):format(short(cand:GetAttribute("BrainrotKey")), tostring(rk)))
-			end
-			local ok, why = cycle(cand, my, true, true)
-			say(ok and ">>> TEST BERHASIL" or (">>> TEST GAGAL: " .. tostring(why)))
-		end
-		if alive(my) then
-			busy = false
-			setStep("selesai")
-			status.Text = ("selesai | merged:%d salah:%d drop:%d"):format(total, wrong, drops)
-		end
-	end)
-end)
-modeBtn = mkBtn("Mode: JALAN", 0, 0.6, 122, 28, function()
-	setMode(mode == "walk" and "tele" or (mode == "tele" and "full" or "walk"))
-end)
-mkBtn("Log: DETAIL", 0.6, 0.4, 122, 28, function(b)
-	verbose = not verbose
-	b.Text = verbose and "Log: DETAIL" or "Log: RINGKAS"
-end)
-mkBtn("Info", 0.2, 0.2, 92, 28, function()
-	local ok, e = pcall(info)
-	if not ok then say("ERROR info: " .. tostring(e)) end
-end)
-mkBtn("Copy", 0.4, 0.2, 92, 28, function(b)
-	local cb = setclipboard or toclipboard or set_clipboard
-	if cb and pcall(cb, table.concat(lines, "\n")) then b.Text = "Copied!" else b.Text = "Tap-tahan" end
-	task.delay(1.2, function() b.Text = "Copy" end)
-end)
-mkBtn("Clear", 0.6, 0.2, 92, 28, function()
-	lines = {}
-	out.Text = ""
-end)
-mkBtn("Reset", 0.8, 0.2, 92, 28, function()
+local function halt()
 	token = token + 1
 	env.AM_ON = false
 	busy = false
 	abortCycle = false
-	env.AM_SKIP = {}
-	env.AM_IDSKIP = {}
+	stopWalking()
 	setBtn(false)
-	stopWalking()
-	setStep("di-reset")
-	status.Text = "di-reset"
-	say("== RESET ==")
-end)
+end
 
-local xb = Instance.new("TextButton")
-xb.Size = UDim2.new(0, 26, 0, 20)
-xb.Position = UDim2.new(1, -30, 0, 3)
-xb.BackgroundColor3 = Color3.fromRGB(60, 60, 75)
-xb.BorderSizePixel = 0
-xb.TextColor3 = Color3.new(1, 1, 1)
-xb.TextSize = 13
-xb.Text = "X"
-xb.Parent = bar
-Instance.new("UICorner", xb).CornerRadius = UDim.new(0, 4)
-xb.Activated:Connect(function()
-	token = token + 1
-	env.AM_ON = false
-	stopWalking()
+local function setOpacity(d)
+	OPACITY = math.clamp(math.floor((OPACITY + d) * 100 + 0.5) / 100, 0.1, 1)
+	opVal.Text = math.floor(OPACITY * 100 + 0.5) .. "%"
+	applyOpacity()
+end
+opMinus.Activated:Connect(function() setOpacity(-0.1) end)
+opPlus.Activated:Connect(function() setOpacity(0.1) end)
+
+-- minimize ke bulat / buka lagi
+minBtn.Activated:Connect(function()
+	orb.Position = win.Position
+	win.Visible = false
+	orb.Visible = true
+end)
+draggable(orb, orb, function()
+	win.Position = orb.Position
+	orb.Visible = false
+	win.Visible = true
+end)
+draggable(head, win)
+
+closeBtn.Activated:Connect(function()
+	halt()
 	gui:Destroy()
 end)
 
-local drag, ds, sp
-bar.InputBegan:Connect(function(i)
-	if i.UserInputType == Enum.UserInputType.Touch or i.UserInputType == Enum.UserInputType.MouseButton1 then
-		drag, ds, sp = true, i.Position, win.Position
-		i.Changed:Connect(function()
-			if i.UserInputState == Enum.UserInputState.End then drag = false end
-		end)
-	end
-end)
-UIS.InputChanged:Connect(function(i)
-	if drag and (i.UserInputType == Enum.UserInputType.Touch or i.UserInputType == Enum.UserInputType.MouseMovement) then
-		local d = i.Position - ds
-		win.Position = UDim2.new(sp.X.Scale, sp.X.Offset + d.X, sp.Y.Scale, sp.Y.Offset + d.Y)
-	end
-end)
-
-say("siap. tap ON (atau Test dulu, jangan sentuh joystick)")
-
--- ===== OPASITAS HUD =====
-local OPACITY = 0.10
-
-local bgList = {}
-local function collect()
-	bgList = {}
-	local function add(o)
-		local isText = o:IsA("TextButton") or o:IsA("TextLabel") or o:IsA("TextBox")
-		if (o:IsA("Frame") or o:IsA("ScrollingFrame") or isText) and o.BackgroundTransparency < 1 then
-			bgList[#bgList + 1] = o
-		end
-		if isText then
-			o.TextStrokeTransparency = 0.5
-			o.TextStrokeColor3 = Color3.new(0, 0, 0)
-		end
-	end
-	add(win)
-	for _, d in ipairs(win:GetDescendants()) do add(d) end
-end
-
-local function applyOpacity()
-	local tr = 1 - OPACITY
-	for _, o in ipairs(bgList) do
-		if o.Parent then o.BackgroundTransparency = tr end
-	end
-	scroll.ScrollBarImageTransparency = 0.3
-end
-
-local function opBtn(text, xoff, delta)
-	local b = Instance.new("TextButton")
-	b.Size = UDim2.new(0, 26, 0, 20)
-	b.Position = UDim2.new(1, xoff, 0, 3)
-	b.BackgroundColor3 = Color3.fromRGB(60, 60, 75)
-	b.BorderSizePixel = 0
-	b.TextColor3 = Color3.new(1, 1, 1)
-	b.TextSize = 13
-	b.Text = text
-	b.Parent = bar
-	Instance.new("UICorner", b).CornerRadius = UDim.new(0, 4)
-	b.Activated:Connect(function()
-		OPACITY = math.clamp(math.floor((OPACITY + delta) * 100 + 0.5) / 100, 0.05, 1)
-		applyOpacity()
-		bar.Text = ("  Auto Merge v13 | opasitas %d%%"):format(math.floor(OPACITY * 100 + 0.5))
-	end)
-end
-opBtn("+", -90, 0.1)
-opBtn("-", -60, -0.1)
-
-collect()
+setBtn(false)
 applyOpacity()
-bar.Text = "  Auto Merge v13 | opasitas 10%"
+say("siap")
