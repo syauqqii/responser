@@ -91,7 +91,7 @@ end
 
 -- panel
 local win = Instance.new("Frame")
-win.Size = UDim2.new(0, 224, 0, 196)
+win.Size = UDim2.new(0, 224, 0, 162)
 win.Position = UDim2.new(0, 16, 0.3, 0)
 win.BackgroundColor3, win.BorderSizePixel, win.Active = C.bg, 0, true
 win.Parent = gui
@@ -110,7 +110,7 @@ head.Size, head.BackgroundTransparency = UDim2.new(1, 0, 0, 34), 1
 head.Parent = win
 local logo = box(head, 14, 11, 12, 12, C.acc, 1)
 logo.Rotation = 45
-label(head, "AUTO MERGE", 36, 0, 110, 34, 12, C.text).Font = Enum.Font.GothamBold
+label(head, "Merge A Mini Army", 34, 0, 122, 34, 11, C.text).Font = Enum.Font.GothamBold
 local minBtn = button(head, "–", 158, 6, 26, 22, C.bg2, 0.9, 14, C.dim)
 local closeBtn = button(head, "×", 188, 6, 26, 22, C.bg2, 0.9, 16, C.off)
 box(win, 12, 34, 200, 1, C.line, 0.8)
@@ -121,28 +121,14 @@ toggle.Font = Enum.Font.GothamBold
 local togStroke = stroke(toggle, C.line, 0.9)
 local status = label(win, "siap", 12, 94, 200, 16, 11, C.dim, Enum.TextXAlignment.Center)
 
--- mode
 local modeBtns = {}
-local function paintModes(m)
-	for k, b in pairs(modeBtns) do
-		local on = k == m
-		b.BackgroundColor3 = on and C.acc or C.bg2
-		b.TextColor3 = on and C.bg or C.dim
-	end
-end
-do
-	local defs = { { "walk", "Manual", 12 }, { "tele", "Semi Auto", 80 }, { "full", "Auto", 148 } }
-	for _, d in ipairs(defs) do
-		local b = button(win, d[2], d[3], 118, 64, 28, C.bg2, 0.9, 11, C.dim)
-		modeBtns[d[1]] = b
-	end
-end
+local function paintModes() end
 
 -- opacity
-label(win, "Opacity", 12, 156, 80, 28, 12, C.dim)
-local opMinus = button(win, "−", 104, 156, 32, 28, C.bg2, 0.9, 16, C.text)
-local opVal = label(win, "85%", 138, 156, 40, 28, 12, C.text, Enum.TextXAlignment.Center)
-local opPlus = button(win, "+", 180, 156, 32, 28, C.bg2, 0.9, 16, C.text)
+label(win, "Opacity", 12, 122, 80, 28, 12, C.dim)
+local opMinus = button(win, "−", 104, 122, 32, 28, C.bg2, 0.9, 16, C.text)
+local opVal = label(win, "85%", 138, 122, 40, 28, 12, C.text, Enum.TextXAlignment.Center)
+local opPlus = button(win, "+", 180, 122, 32, 28, C.bg2, 0.9, 16, C.text)
 
 -- orb (mode minimize)
 local orb = Instance.new("TextButton")
@@ -194,7 +180,7 @@ local function L(v, s) if v then say(s) end end
 -- ===== status =====
 local busy, step, stepT = false, "siap", os.clock()
 local total, wrong, drops = 0, 0, 0
-local mode, verbose, fullFail = env.AM_MODE or "full", env.AM_DEBUG == true, 0
+local mode, verbose, fullFail = "full", env.AM_DEBUG == true, 0
 local MODENAME = { walk = "MANUAL", tele = "SEMI", full = "AUTO" }
 paintModes(mode)
 local function setStep(s) step, stepT = s, os.clock() end
@@ -309,7 +295,6 @@ local function argstr(t)
 end
 local function setMode(m)
 	mode, fullFail = m, 0
-	env.AM_MODE = m
 	paintModes(m)
 	say("MODE -> " .. MODENAME[m])
 end
