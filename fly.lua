@@ -1,4 +1,4 @@
--- Fly / AirWalk GUI | R6/R15, PC + mobile
+-- Universal GUI: Fly / AirWalk / WalkSpeed / Allow emote / Teleport ke player | R6/R15, PC + mobile
 -- MODE AIRWALK (default): jalan & lompat normal di atas void (lantai transparan di bawah kaki)
 -- MODE FLY: melayang, gerak mengikuti kamera
 -- Keyboard: F toggle, E naik, Q turun
@@ -195,22 +195,62 @@ local function findEmoteId(hum, name)
 	end
 end
 
-local function playEmote(name)
-	local hum = getParts()
-	if not hum then return false end
-	local id = findEmoteId(hum, tostring(name))
-	if not id then return false end
+local function playEmoteById(hum, id, startPos)
 	stopEmote()
 	local anim = Instance.new("Animation")
 	anim.AnimationId = id
 	local animator = hum:FindFirstChildOfClass("Animator") or hum
 	local ok, track = pcall(function() return animator:LoadAnimation(anim) end)
 	if not ok or not track then return false end
-	track.Priority = Enum.AnimationPriority.Action4
+	track.Priority = Enum.AnimationPriority.Action4 -- di atas animasi jalan
 	track.Looped = true -- terus main selama bergerak
 	track:Play()
+	if startPos then track.TimePosition = startPos end
 	emoteTrack = track
 	return true, track
+end
+
+local function playEmote(name)
+	local hum = getParts()
+	if not hum then return false end
+	local id = findEmoteId(hum, tostring(name))
+	if not id then return false end
+	return playEmoteById(hum, id)
+end
+
+-- Ambil alih emote yang SEDANG jalan (dimulai sebelum fitur ON): hentikan track asli milik Animate
+-- (yang akan di-stop Animate begitu karakter bergerak) lalu lanjutkan dari posisi yang sama
+-- dengan track milik kita sendiri, supaya tidak ikut berhenti saat jalan.
+local function adoptEmote()
+	local hum = getParts()
+	if not hum then return end
+	local known = {}
+	local function add(id) local n = string.match(tostring(id), "%d+") if n then known[n] = true end end
+	local animate = player.Character and player.Character:FindFirstChild("Animate")
+	if animate then
+		for _, v in ipairs(animate:GetChildren()) do
+			if v:IsA("StringValue") then
+				for _, a in ipairs(v:GetChildren()) do if a:IsA("Animation") then add(a.AnimationId) end end
+			end
+		end
+	end
+	local desc = hum:FindFirstChildOfClass("HumanoidDescription")
+	if desc then
+		local ok, emotes = pcall(function() return desc:GetEmotes() end)
+		if ok and emotes then
+			for _, ids in pairs(emotes) do for _, id in ipairs(ids) do add(id) end end
+		end
+	end
+	for _, track in ipairs(hum:GetPlayingAnimationTracks()) do
+		local aid = track.Animation and track.Animation.AnimationId
+		local n = aid and string.match(aid, "%d+")
+		if n and known[n] and track ~= emoteTrack then
+			local pos = track.TimePosition
+			track:Stop(0)
+			playEmoteById(hum, aid, pos)
+			return
+		end
+	end
 end
 
 local function installEmote()
@@ -257,7 +297,7 @@ local function toggleFly()
 		shutdown()
 	else
 		if state.mode == "air" then startAirWalk() else startFly() end
-		if state.flying and state.emote then installEmote() end
+		if state.flying and state.emote then installEmote() adoptEmote() end
 	end
 end
 
@@ -368,6 +408,115 @@ local btnWsRst = button(panel, "R", UDim2.fromOffset(22, 26), UDim2.fromOffset(1
 -- Baris 5: centang allow emote
 local btnEmote = button(panel, "☐ Allow emote", UDim2.fromOffset(154, 26), UDim2.fromOffset(8, 154))
 
+-- ========== TAB: MOVE | PLAYERS ==========
+header.Text = ""
+local tabMove    = button(panel, "MOVE", UDim2.fromOffset(52, 20), UDim2.fromOffset(8, 4))
+local tabPlayers = button(panel, "PLAYERS", UDim2.fromOffset(62, 20), UDim2.fromOffset(64, 4))
+tabMove.TextSize, tabPlayers.TextSize = 11, 11
+
+local pageMove = Instance.new("Frame")
+pageMove.Size = UDim2.fromScale(1, 1)
+pageMove.BackgroundTransparency = 1
+pageMove.Parent = panel
+for _, c in ipairs({ btnFly, btnUp, btnDown, btnSub, lblSpd, btnAdd, btnMode,
+	btnWsSub, lblWs, btnWsAdd, btnWsRst, btnEmote }) do
+	c.Parent = pageMove
+end
+
+local pagePlayers = Instance.new("Frame")
+pagePlayers.Size = UDim2.fromScale(1, 1)
+pagePlayers.BackgroundTransparency = 1
+pagePlayers.Visible = false
+pagePlayers.Parent = panel
+
+local list = Instance.new("ScrollingFrame")
+list.Size = UDim2.fromOffset(154, 88)
+list.Position = UDim2.fromOffset(8, 30)
+list.BackgroundColor3 = Color3.new(1, 1, 1)
+list.BackgroundTransparency = 0.92
+list.BorderSizePixel = 0
+list.ScrollBarThickness = 3
+list.CanvasSize = UDim2.new()
+list.AutomaticCanvasSize = Enum.AutomaticSize.Y
+list.Parent = pagePlayers
+corner(list, 6)
+local layout = Instance.new("UIListLayout")
+layout.Padding = UDim.new(0, 2)
+layout.Parent = list
+
+local btnTp  = button(pagePlayers, "TELEPORT", UDim2.fromOffset(100, 26), UDim2.fromOffset(8, 122))
+local btnRef = button(pagePlayers, "⟳", UDim2.fromOffset(50, 26), UDim2.fromOffset(112, 122))
+local lblSel = Instance.new("TextLabel")
+lblSel.Size = UDim2.fromOffset(154, 26)
+lblSel.Position = UDim2.fromOffset(8, 154)
+lblSel.BackgroundTransparency = 1
+lblSel.Text = "Pilih player dulu"
+lblSel.Font = Enum.Font.Gotham
+lblSel.TextSize = 11
+lblSel.TextColor3 = Color3.new(1, 1, 1)
+lblSel.TextTruncate = Enum.TextTruncate.AtEnd
+lblSel.Parent = pagePlayers
+
+local selected -- Player yang dipilih
+local function renderPlayers()
+	for _, c in ipairs(list:GetChildren()) do
+		if c:IsA("TextButton") then c:Destroy() end
+	end
+	for _, p in ipairs(Players:GetPlayers()) do
+		if p ~= player then
+			local row = button(list, p.DisplayName .. " (@" .. p.Name .. ")", UDim2.new(1, -6, 0, 22), UDim2.new())
+			row.TextSize = 11
+			row.TextXAlignment = Enum.TextXAlignment.Left
+			row.TextTruncate = Enum.TextTruncate.AtEnd
+			row.BackgroundColor3 = selected == p and ACCENT or Color3.new(1, 1, 1)
+			row.BackgroundTransparency = selected == p and 0.55 or 0.9
+			row.MouseButton1Click:Connect(function()
+				selected = p
+				lblSel.Text = "Dipilih: " .. p.Name
+				renderPlayers()
+			end)
+		end
+	end
+end
+
+local function teleportTo(target)
+	local _, root = getParts()
+	local tc = target and target.Character
+	local troot = tc and tc:FindFirstChild("HumanoidRootPart")
+	if not (root and troot) then lblSel.Text = "Player tidak ditemukan" return end
+	local wasAir = state.flying and state.mode == "air"
+	root.CFrame = troot.CFrame * CFrame.new(0, 0, 3)
+	root.AssemblyLinearVelocity = Vector3.zero
+	if wasAir then -- lantai airwalk dihitung ulang di ketinggian baru
+		startAirWalk()
+		if state.emote then installEmote() end
+	end
+	lblSel.Text = "Teleport ke " .. target.Name
+end
+
+btnTp.MouseButton1Click:Connect(function()
+	if selected then teleportTo(selected) else lblSel.Text = "Pilih player dulu" end
+end)
+btnRef.MouseButton1Click:Connect(renderPlayers)
+
+local plrConns = {
+	Players.PlayerAdded:Connect(function() renderPlayers() end),
+	Players.PlayerRemoving:Connect(function(p)
+		if selected == p then selected = nil lblSel.Text = "Pilih player dulu" end
+		task.defer(renderPlayers)
+	end),
+}
+
+local function showTab(name)
+	pageMove.Visible = name == "move"
+	pagePlayers.Visible = name == "players"
+	tabMove.BackgroundTransparency = name == "move" and 0.6 or 0.9
+	tabPlayers.BackgroundTransparency = name == "players" and 0.6 or 0.9
+end
+tabMove.MouseButton1Click:Connect(function() showTab("move") end)
+tabPlayers.MouseButton1Click:Connect(function() renderPlayers() showTab("players") end)
+showTab("move")
+
 -- Tombol mini (saat minimize)
 local mini = Instance.new("TextButton")
 mini.Name = "Mini"
@@ -407,7 +556,7 @@ btnWsRst.MouseButton1Click:Connect(function() resetWS() refresh() end)
 btnEmote.MouseButton1Click:Connect(function()
 	state.emote = not state.emote
 	if state.emote then
-		if state.flying then installEmote() end
+		if state.flying then installEmote() adoptEmote() end
 	else
 		restoreAnimate()
 	end
@@ -464,6 +613,7 @@ btnClose.MouseButton1Click:Connect(function()
 	resetWS()
 	wsConn:Disconnect()
 	emoteConn:Disconnect()
+	for _, c in ipairs(plrConns) do c:Disconnect() end
 	gui:Destroy()
 end)
 
