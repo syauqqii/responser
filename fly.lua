@@ -1,6 +1,5 @@
--- Movement Hub (UNIVERSAL: client-side, works in any game)
--- Features: Fly/AirWalk, Walk Speed, Jump Power, Infinite Jump, emote-safe movement
---           (joystick override + D-Pad), Teleport to player
+-- Movement Hub Lite (UNIVERSAL: client-side, works in any game)
+-- Fly/AirWalk, Walk/Jump/Fly speed (type or +/-), Infinite Jump, Override joystick + D-Pad (auto emote), Teleport dropdown
 -- Hotkeys: F = toggle flight | E = up | Q = down
 
 local Players    = game:GetService("Players")
@@ -483,12 +482,15 @@ bind(player.CharacterAdded, function()
 end)
 
 ----------------------------------------------------------------
--- UI
+-- UI (compact)
 ----------------------------------------------------------------
 local ACCENT = Color3.fromRGB(110, 190, 255)
 local WHITE  = Color3.new(1, 1, 1)
 local DARK   = Color3.fromRGB(16, 16, 22)
-local PANEL_W, PANEL_H = 230, 336
+local INK    = Color3.fromRGB(10, 10, 15)
+local PANEL_W, PANEL_H = 196, 262
+local X0, ROW = 8, 26
+local Y = { 34, 66, 98, 130, 162, 194, 228 } -- row positions
 
 local gui = Instance.new("ScreenGui")
 gui.Name = "FlyGUI"
@@ -549,12 +551,13 @@ local refreshers = {}
 local function reg(fn) table.insert(refreshers, fn) fn() end
 local function refresh() for _, fn in ipairs(refreshers) do fn() end end
 
+-- main panel
 local panel = Instance.new("Frame")
 panel.Name = "Panel"
 panel.Size = UDim2.fromOffset(PANEL_W, PANEL_H)
 panel.Position = UDim2.fromScale(0.04, 0.3)
 panel.BackgroundColor3 = DARK
-panel.BackgroundTransparency = 0.82
+panel.BackgroundTransparency = 0.35
 panel.BorderSizePixel = 0
 panel.Parent = gui
 corner(panel, 12)
@@ -568,15 +571,101 @@ local header = Instance.new("Frame")
 header.Size = UDim2.new(1, 0, 0, 30)
 header.BackgroundTransparency = 1
 header.Parent = panel
-label(header, "Movement Hub", UDim2.fromOffset(110, 30), UDim2.fromOffset(10, 0), 13, Enum.Font.GothamBold)
-local badge = label(header, "UNIVERSAL", UDim2.fromOffset(64, 16), UDim2.fromOffset(104, 7), 9, Enum.Font.GothamBold)
+label(header, "FLY", UDim2.fromOffset(34, 30), UDim2.fromOffset(10, 0), 13, Enum.Font.GothamBold)
+local badge = label(header, "UNIVERSAL", UDim2.fromOffset(62, 16), UDim2.fromOffset(46, 7), 9, Enum.Font.GothamBold)
 badge.TextXAlignment = Enum.TextXAlignment.Center
-badge.TextColor3 = Color3.fromRGB(15, 15, 20)
+badge.TextColor3 = INK
 badge.BackgroundTransparency = 0
 badge.BackgroundColor3 = ACCENT
 corner(badge, 8)
 local btnMin   = button(header, "–", UDim2.fromOffset(22, 20), UDim2.new(1, -50, 0, 5))
 local btnClose = button(header, "×", UDim2.fromOffset(22, 20), UDim2.new(1, -26, 0, 5))
+
+-- row 1: flight, mode, up, down
+local btnFly = button(panel, "FLY", UDim2.fromOffset(70, ROW), UDim2.fromOffset(X0, Y[1]))
+local btnMode = button(panel, "", UDim2.fromOffset(46, ROW), UDim2.fromOffset(X0 + 74, Y[1]))
+local btnUp   = button(panel, "▲", UDim2.fromOffset(26, ROW), UDim2.fromOffset(X0 + 124, Y[1]))
+local btnDown = button(panel, "▼", UDim2.fromOffset(26, ROW), UDim2.fromOffset(X0 + 154, Y[1]))
+btnFly.TextSize, btnMode.TextSize = 11, 11
+holdBtn(btnUp, function(v) state.up = v end)
+holdBtn(btnDown, function(v) state.down = v end)
+reg(function()
+	btnFly.BackgroundColor3 = state.flying and ACCENT or WHITE
+	btnFly.BackgroundTransparency = state.flying and 0.5 or 0.9
+	btnFly.TextColor3 = state.flying and INK or WHITE
+	btnMode.Text = state.mode == "air" and "AIR" or "FREE"
+end)
+btnFly.MouseButton1Click:Connect(function() toggleFly() refresh() end)
+btnMode.MouseButton1Click:Connect(function()
+	shutdown()
+	state.mode = state.mode == "air" and "fly" or "air"
+	refresh()
+end)
+
+-- number rows: [label] [-] [type a value] [+]   (empty box = reset to game default)
+local function numRow(y, text, get, step, min, max, set, reset)
+	label(panel, text, UDim2.fromOffset(42, ROW), UDim2.fromOffset(X0, y), 12)
+	local minus = button(panel, "-", UDim2.fromOffset(30, ROW), UDim2.fromOffset(X0 + 44, y))
+	local box = Instance.new("TextBox")
+	box.Size = UDim2.fromOffset(64, ROW)
+	box.Position = UDim2.fromOffset(X0 + 78, y)
+	box.BackgroundColor3 = WHITE
+	box.BackgroundTransparency = 0.85
+	box.BorderSizePixel = 0
+	box.Font = Enum.Font.GothamBold
+	box.TextSize = 12
+	box.TextColor3 = WHITE
+	box.PlaceholderText = "default"
+	box.PlaceholderColor3 = Color3.fromRGB(170, 170, 180)
+	box.ClearTextOnFocus = false
+	box.Parent = panel
+	corner(box, 6)
+	local plus = button(panel, "+", UDim2.fromOffset(30, ROW), UDim2.fromOffset(X0 + 146, y))
+
+	reg(function() box.Text = tostring(math.floor(get() + 0.5)) end)
+	minus.MouseButton1Click:Connect(function() set(math.clamp(get() - step, min, max)) refresh() end)
+	plus.MouseButton1Click:Connect(function() set(math.clamp(get() + step, min, max)) refresh() end)
+	box.FocusLost:Connect(function()
+		if box.Text == "" then
+			if reset then reset() end
+		else
+			local n = tonumber(box.Text)
+			if n then set(math.clamp(n, min, max)) end
+		end
+		refresh()
+	end)
+end
+
+numRow(Y[2], "Fly", function() return state.flySpeed end, 1, 1, 50,
+	function(v) state.flySpeed = v end, function() state.flySpeed = 5 end)
+numRow(Y[3], "Walk", function() return state.ws or defaults.ws end, 4, 1, 300,
+	function(v) state.ws = v end, resetWalk)
+numRow(Y[4], "Jump", function() return state.jump or defaults.jump end, 10, 1, 500,
+	function(v) state.jump = v end, resetJump)
+
+-- toggles
+local function toggle(x, y, w, text, get, onClick)
+	local b = button(panel, text, UDim2.fromOffset(w, ROW), UDim2.fromOffset(x, y))
+	b.TextSize = 11
+	reg(function()
+		local on = get()
+		b.BackgroundColor3 = on and ACCENT or WHITE
+		b.BackgroundTransparency = on and 0.5 or 0.9
+		b.TextColor3 = on and INK or WHITE
+	end)
+	b.MouseButton1Click:Connect(function() onClick() refresh() end)
+	return b
+end
+
+toggle(X0, Y[5], 86, "INF JUMP", function() return state.infJump end,
+	function() state.infJump = not state.infJump end)
+toggle(X0 + 90, Y[5], 90, "OVERRIDE", function() return state.override end,
+	function() state.override = not state.override end)
+toggle(X0, Y[6], 86, "D-PAD", function() return state.showPad end,
+	function() state.showPad = not state.showPad end)
+local btnStop = button(panel, "STOP EMOTE", UDim2.fromOffset(90, ROW), UDim2.fromOffset(X0 + 90, Y[6]))
+btnStop.TextSize = 11
+btnStop.MouseButton1Click:Connect(function() clearEmote() end)
 
 -- D-Pad (separate floating, draggable window)
 local dpad = Instance.new("Frame")
@@ -584,7 +673,7 @@ dpad.Name = "DPad"
 dpad.Size = UDim2.fromOffset(196, 172)
 dpad.Position = UDim2.new(1, -216, 1, -200)
 dpad.BackgroundColor3 = DARK
-dpad.BackgroundTransparency = 0.82
+dpad.BackgroundTransparency = 0.5
 dpad.BorderSizePixel = 0
 dpad.Visible = false
 dpad.Parent = gui
@@ -596,7 +685,7 @@ local dpadHandle = Instance.new("Frame")
 dpadHandle.Size = UDim2.new(1, 0, 0, 20)
 dpadHandle.BackgroundTransparency = 1
 dpadHandle.Parent = dpad
-local dpTitle = label(dpadHandle, "D-PAD  (drag here)", UDim2.fromScale(1, 1), UDim2.new(), 9, Enum.Font.GothamBold)
+local dpTitle = label(dpadHandle, "D-PAD", UDim2.fromScale(1, 1), UDim2.new(), 9, Enum.Font.GothamBold)
 dpTitle.TextXAlignment = Enum.TextXAlignment.Center
 dpTitle.TextTransparency = 0.4
 
@@ -614,167 +703,74 @@ padBtn("UP", 152, 24, 36, 68, function(v) state.up = v end, 11)
 padBtn("DN", 152, 96, 36, 68, function(v) state.down = v end, 11)
 reg(function() dpad.Visible = state.showPad end)
 
--- tabs
-local tabNames = { "MOVE", "FLY", "PLAYERS" }
-local tabs, pages = {}, {}
-for i, name in ipairs(tabNames) do
-	tabs[name] = button(panel, name, UDim2.fromOffset(66, 22), UDim2.fromOffset(8 + (i - 1) * 71, 32))
-	tabs[name].TextSize = 11
-end
+-- teleport: pick a player from the dropdown, then press TP
+local selected
+local btnDrop = button(panel, "", UDim2.fromOffset(122, ROW), UDim2.fromOffset(X0, Y[7]))
+btnDrop.TextXAlignment = Enum.TextXAlignment.Left
+btnDrop.TextTruncate = Enum.TextTruncate.AtEnd
+btnDrop.TextSize = 11
+local dropPad = Instance.new("UIPadding")
+dropPad.PaddingLeft = UDim.new(0, 8)
+dropPad.PaddingRight = UDim.new(0, 6)
+dropPad.Parent = btnDrop
+local btnTp = button(panel, "TP", UDim2.fromOffset(52, ROW), UDim2.fromOffset(X0 + 128, Y[7]))
+btnTp.TextSize = 11
+btnTp.BackgroundColor3 = ACCENT
+btnTp.BackgroundTransparency = 0.5
 
-local function newPage(layout)
-	local f = Instance.new("Frame")
-	f.Size = UDim2.new(1, -16, 0, 232)
-	f.Position = UDim2.fromOffset(8, 60)
-	f.BackgroundTransparency = 1
-	f.Visible = false
-	f.Parent = panel
-	if layout then
-		local l = Instance.new("UIListLayout")
-		l.Padding = UDim.new(0, 6)
-		l.SortOrder = Enum.SortOrder.LayoutOrder
-		l.Parent = f
-	end
-	return f
-end
-pages.MOVE, pages.FLY, pages.PLAYERS = newPage(true), newPage(true), newPage(false)
-
-local order = 0
-local function row(parent)
-	order += 1
-	local r = Instance.new("Frame")
-	r.Size = UDim2.new(1, 0, 0, 28)
-	r.BackgroundTransparency = 1
-	r.LayoutOrder = order
-	r.Parent = parent
-	return r
-end
-
--- [label]  [-]  value  [+]  [R]
-local function stepper(parent, text, get, step, min, max, set, reset)
-	local r = row(parent)
-	label(r, text, UDim2.fromOffset(70, 28), UDim2.fromOffset(2, 0), 12)
-	local minus = button(r, "-", UDim2.fromOffset(28, 28), UDim2.fromOffset(72, 0))
-	local val = label(r, "", UDim2.fromOffset(40, 28), UDim2.fromOffset(102, 0), 12, Enum.Font.GothamBold)
-	val.TextXAlignment = Enum.TextXAlignment.Center
-	local plus = button(r, "+", UDim2.fromOffset(28, 28), UDim2.fromOffset(144, 0))
-	local rst = button(r, "R", UDim2.fromOffset(28, 28), UDim2.fromOffset(176, 0))
-	reg(function() val.Text = tostring(math.floor(get() + 0.5)) end)
-	minus.MouseButton1Click:Connect(function() set(math.clamp(get() - step, min, max)) refresh() end)
-	plus.MouseButton1Click:Connect(function() set(math.clamp(get() + step, min, max)) refresh() end)
-	rst.MouseButton1Click:Connect(function() reset() refresh() end)
-end
-
-local function toggleRow(parent, text, get, onClick)
-	local r = row(parent)
-	local b = button(r, "", UDim2.fromScale(1, 1), UDim2.new())
-	b.TextXAlignment = Enum.TextXAlignment.Left
-	local pad_ = Instance.new("UIPadding")
-	pad_.PaddingLeft = UDim.new(0, 10)
-	pad_.Parent = b
-	reg(function()
-		local on = get()
-		b.Text = (on and "●  " or "○  ") .. text
-		b.BackgroundColor3 = on and ACCENT or WHITE
-		b.BackgroundTransparency = on and 0.55 or 0.9
-	end)
-	b.MouseButton1Click:Connect(function() onClick() refresh() end)
-	return b
-end
-
-local function note(parent, text, height)
-	order += 1
-	local l = label(parent, text, UDim2.new(1, 0, 0, height or 30), UDim2.new(), 10)
-	l.TextWrapped = true
-	l.TextYAlignment = Enum.TextYAlignment.Top
-	l.TextTransparency = 0.35
-	l.LayoutOrder = order
-	return l
-end
-
--- MOVE page
-stepper(pages.MOVE, "Walk", function() return state.ws or defaults.ws end,
-	4, 4, 200, function(v) state.ws = v end, resetWalk)
-stepper(pages.MOVE, "Jump", function() return state.jump or defaults.jump end,
-	10, 10, 300, function(v) state.jump = v end, resetJump)
-toggleRow(pages.MOVE, "Infinite Jump", function() return state.infJump end,
-	function() state.infJump = not state.infJump end)
-note(pages.MOVE, "Infinite Jump: tap Jump repeatedly in mid-air to keep jumping. R = restore the game's original value.", 42)
-
--- FLY page
-toggleRow(pages.FLY, "Flight", function() return state.flying end, toggleFly)
-do
-	local r = row(pages.FLY)
-	local b = button(r, "", UDim2.fromScale(1, 1), UDim2.new())
-	reg(function()
-		b.Text = state.mode == "air" and "Mode: AirWalk (walk on air)" or "Mode: Fly (free flight)"
-	end)
-	b.MouseButton1Click:Connect(function()
-		shutdown()
-		state.mode = state.mode == "air" and "fly" or "air"
-		refresh()
-	end)
-end
-stepper(pages.FLY, "Fly speed", function() return state.flySpeed end,
-	1, 1, 20, function(v) state.flySpeed = v end, function() state.flySpeed = 5 end)
-do
-	local r = row(pages.FLY)
-	local b = button(r, "Stop emote", UDim2.fromScale(1, 1), UDim2.new())
-	b.MouseButton1Click:Connect(function() clearEmote() end)
-end
-toggleRow(pages.FLY, "Override joystick", function() return state.override end,
-	function() state.override = not state.override end)
-toggleRow(pages.FLY, "Show D-Pad", function() return state.showPad end,
-	function() state.showPad = not state.showPad end)
-note(pages.FLY, "Flight / Override / D-Pad on = emote stays. Override & D-Pad move you manually. F = flight.", 28)
-
--- PLAYERS page (teleports only YOUR character to the target)
 local list = Instance.new("ScrollingFrame")
-list.Size = UDim2.new(1, 0, 0, 110)
-list.BackgroundColor3 = WHITE
-list.BackgroundTransparency = 0.94
+list.Size = UDim2.fromOffset(180, 112)
+list.Position = UDim2.fromOffset(X0, Y[7] - 118)
+list.BackgroundColor3 = Color3.fromRGB(24, 24, 32)
+list.BackgroundTransparency = 0.05
 list.BorderSizePixel = 0
 list.ScrollBarThickness = 3
 list.CanvasSize = UDim2.new()
 list.AutomaticCanvasSize = Enum.AutomaticSize.Y
-list.Parent = pages.PLAYERS
+list.ZIndex = 10
+list.Visible = false
+list.Parent = panel
 corner(list, 6)
 local ll = Instance.new("UIListLayout")
 ll.Padding = UDim.new(0, 2)
 ll.Parent = list
 
-local btnTp  = button(pages.PLAYERS, "TELEPORT", UDim2.new(1, -56, 0, 28), UDim2.fromOffset(0, 118))
-local btnRef = button(pages.PLAYERS, "⟳", UDim2.fromOffset(50, 28), UDim2.new(1, -50, 0, 118))
-local lblSel = label(pages.PLAYERS, "Select a player first", UDim2.new(1, 0, 0, 24), UDim2.fromOffset(0, 152), 11)
-lblSel.TextTruncate = Enum.TextTruncate.AtEnd
+reg(function()
+	btnDrop.Text = (selected and selected.DisplayName or "Select player") .. "  ▾"
+end)
 
-local selected
 local function renderPlayers()
 	for _, c in ipairs(list:GetChildren()) do
 		if c:IsA("TextButton") then c:Destroy() end
 	end
 	for _, p in ipairs(Players:GetPlayers()) do
 		if p ~= player then
-			local b = button(list, p.DisplayName .. " (@" .. p.Name .. ")", UDim2.new(1, -6, 0, 22), UDim2.new())
+			local b = button(list, p.DisplayName .. " (@" .. p.Name .. ")", UDim2.new(1, -6, 0, 24), UDim2.new())
 			b.TextSize = 11
 			b.TextXAlignment = Enum.TextXAlignment.Left
 			b.TextTruncate = Enum.TextTruncate.AtEnd
 			b.BackgroundColor3 = selected == p and ACCENT or WHITE
-			b.BackgroundTransparency = selected == p and 0.55 or 0.9
+			b.BackgroundTransparency = selected == p and 0.5 or 0.9
+			b.TextColor3 = selected == p and INK or WHITE
 			b.MouseButton1Click:Connect(function()
 				selected = p
-				lblSel.Text = "Selected: " .. p.Name
-				renderPlayers()
+				list.Visible = false
+				refresh()
 			end)
 		end
 	end
 end
 
+btnDrop.MouseButton1Click:Connect(function()
+	list.Visible = not list.Visible
+	if list.Visible then renderPlayers() end
+end)
+
 local function teleportTo(target)
 	local _, root = getParts()
 	local tc = target and target.Character
 	local troot = tc and tc:FindFirstChild("HumanoidRootPart")
-	if not (root and troot) then lblSel.Text = "Player not found" return end
+	if not (root and troot) then return false end
 	local wasAir = state.flying and state.mode == "air"
 	root.CFrame = troot.CFrame * CFrame.new(0, 0, 3)
 	root.AssemblyLinearVelocity = Vector3.zero
@@ -782,45 +778,27 @@ local function teleportTo(target)
 		startAirWalk()
 		installEmote()
 	end
-	lblSel.Text = "Teleported to " .. target.Name
+	return true
 end
 
 btnTp.MouseButton1Click:Connect(function()
-	if selected then teleportTo(selected) else lblSel.Text = "Select a player first" end
+	list.Visible = false
+	local ok = selected and teleportTo(selected)
+	btnTp.Text = ok and "✓" or "✗"
+	task.delay(1, function() btnTp.Text = "TP" end)
 end)
-btnRef.MouseButton1Click:Connect(renderPlayers)
-bind(Players.PlayerAdded, function() renderPlayers() end)
+
+bind(Players.PlayerAdded, function() if list.Visible then renderPlayers() end end)
 bind(Players.PlayerRemoving, function(p)
-	if selected == p then selected = nil lblSel.Text = "Select a player first" end
-	task.defer(renderPlayers)
+	if selected == p then selected = nil refresh() end
+	task.defer(function() if list.Visible then renderPlayers() end end)
 end)
-
--- footer info
-local footer = label(panel, "🌐 Universal: works in any game (client-side). Games with anti-cheat or server checks may reset values.",
-	UDim2.new(1, -16, 0, 34), UDim2.new(0, 8, 1, -38), 9)
-footer.TextWrapped = true
-footer.TextYAlignment = Enum.TextYAlignment.Top
-footer.TextTransparency = 0.4
-
--- tab switching
-local function showTab(name)
-	for n, page in pairs(pages) do
-		page.Visible = (n == name)
-		tabs[n].BackgroundColor3 = n == name and ACCENT or WHITE
-		tabs[n].BackgroundTransparency = n == name and 0.55 or 0.9
-	end
-	if name == "PLAYERS" then renderPlayers() end
-end
-for name, b in pairs(tabs) do
-	b.MouseButton1Click:Connect(function() showTab(name) end)
-end
-showTab("MOVE")
 
 -- minimize
 local mini = Instance.new("TextButton")
 mini.Size = UDim2.fromOffset(34, 34)
 mini.BackgroundColor3 = DARK
-mini.BackgroundTransparency = 0.45
+mini.BackgroundTransparency = 0.35
 mini.BorderSizePixel = 0
 mini.Text = "✈"
 mini.TextSize = 16
@@ -834,6 +812,7 @@ miniStroke.Parent = mini
 reg(function() mini.TextColor3 = state.flying and ACCENT or WHITE end)
 
 btnMin.MouseButton1Click:Connect(function()
+	list.Visible = false
 	mini.Position = panel.Position
 	panel.Visible = false
 	mini.Visible = true
