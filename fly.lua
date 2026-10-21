@@ -18,7 +18,7 @@ if old then old:Destroy() end
 ----------------------------------------------------------------
 local state = {
 	flying = false, mode = "air", flySpeed = 5, up = false, down = false,
-	ws = nil, jump = nil, infJump = false, emote = false,
+	ws = nil, jump = nil, infJump = false,
 	override = false, showPad = false,
 }
 local pad = { f = false, b = false, l = false, r = false }
@@ -33,6 +33,7 @@ end
 local bv, bg, flyConn, platform
 local flyDisabled = false
 local wsZeroed = false
+local animateSuppressed = false
 
 local FLY_STATES = {
 	"Climbing", "FallingDown", "Flying", "Freefall", "GettingUp", "Jumping", "Landed", "Physics",
@@ -64,10 +65,45 @@ local function padVector()
 	return v.Magnitude > 0 and v.Unit or Vector3.zero
 end
 
--- Joystick override only applies to AirWalk
-local function overrideActive()
-	return state.override and state.flying and state.mode == "air"
+local function flyMode()
+	return state.flying and state.mode == "fly"
 end
+
+-- Joystick override works on the ground and in AirWalk (Fly mode already moves manually)
+local function overrideActive()
+	return state.override and not flyMode()
+end
+
+-- Emote hold is on while flying, or while Override / D-Pad is on
+local function emoteActive()
+	return state.flying or state.override or state.showPad
+end
+
+-- Manual horizontal movement (D-Pad, or joystick/WASD when Override is on).
+-- The Humanoid itself never walks, so animations/emotes are never interrupted.
+local function manualMove(dt)
+	if flyMode() then return end
+	local h, r = getParts()
+	if not (h and r and h.Health > 0) then return end
+	local dir = Vector3.zero
+	local pv = padVector()
+	if pv.Magnitude > 0 then
+		dir = pv
+	elseif state.override then
+		dir = h.MoveDirection
+	end
+	dir = Vector3.new(dir.X, 0, dir.Z)
+	if dir.Magnitude > 0 then
+		dir = dir.Unit
+		local pos = r.Position + dir * (state.ws or defaults.ws) * dt
+		r.CFrame = CFrame.lookAt(pos, pos + dir)
+	end
+end
+
+-- Ground movement (not flying). While AirWalking, the AirWalk loop calls manualMove itself.
+bind(RunService.RenderStepped, function(dt)
+	if not state.flying then manualMove(dt) end
+end)
 
 ----------------------------------------------------------------
 -- FLY / AIRWALK
@@ -88,6 +124,7 @@ local function stopFly()
 		end
 		local animate = player.Character and player.Character:FindFirstChild("Animate")
 		if animate then animate.Disabled = false end
+		animateSuppressed = false
 	end
 end
 
@@ -112,21 +149,7 @@ local function startAirWalk()
 		local h, r = getParts()
 		if not (h and r and h.Health > 0) then return stopFly() end
 
-		-- Manual horizontal movement (D-Pad, or joystick/WASD when override is on).
-		-- The Humanoid itself never walks, so animations/emotes are never interrupted.
-		local dir = Vector3.zero
-		local pv = padVector()
-		if pv.Magnitude > 0 then
-			dir = pv
-		elseif state.override then
-			dir = h.MoveDirection
-		end
-		dir = Vector3.new(dir.X, 0, dir.Z)
-		if dir.Magnitude > 0 then
-			dir = dir.Unit
-			local pos = r.Position + dir * (state.ws or defaults.ws) * dt
-			r.CFrame = CFrame.lookAt(pos, pos + dir)
-		end
+		manualMove(dt)
 
 		level += ((state.up and 1 or 0) - (state.down and 1 or 0)) * state.flySpeed * 5 * dt
 		platform.CFrame = CFrame.new(r.Position.X, level - 0.5, r.Position.Z)
@@ -264,7 +287,8 @@ end)
 -- walk/idle tracks, (3) replay the emote instantly if anything stops it.
 ----------------------------------------------------------------
 local emoteTrack, emoteId, emotePos = nil, nil, 0
-local animateOverridden, animateSuppressed = false, false
+local animateOverridden = false
+local wasEmoteActive = false
 
 local function stopEmote()
 	if emoteTrack then pcall(function() emoteTrack:Stop() end) emoteTrack = nil end
@@ -367,16 +391,19 @@ local function adoptEmote()
 	end
 end
 
+local function emoteHandler(name) return playEmote(name) end
+
 local function installEmote()
 	local animate = player.Character and player.Character:FindFirstChild("Animate")
 	local pe = animate and animate:FindFirstChild("PlayEmote")
 	if pe and pe:IsA("BindableFunction") then
-		pe.OnInvoke = function(name) return playEmote(name) end
+		pe.OnInvoke = emoteHandler
 		animateOverridden = true
 	end
 end
 
 local function restoreAnimate()
+	if emoteActive() then return end -- Override / D-Pad still need the emote hold
 	clearEmote()
 	suppressAnimate(false)
 	if not animateOverridden then return end
@@ -395,7 +422,17 @@ end
 bind(RunService.Heartbeat, function()
 	local h = getParts()
 	if not h then return end
-	if state.emote and state.flying and emoteId then
+	local active = emoteActive()
+	if active then
+		installEmote() -- keep our emote hook alive (Animate can reset it)
+		if not wasEmoteActive then adoptEmote() end
+		wasEmoteActive = true
+	elseif wasEmoteActive then
+		wasEmoteActive = false
+		restoreAnimate()
+		return
+	end
+	if active and emoteId then
 		suppressAnimate(true)
 		-- replay instantly if something stopped the emote
 		if not (emoteTrack and emoteTrack.IsPlaying) then
@@ -414,7 +451,6 @@ bind(RunService.Heartbeat, function()
 		end
 	else
 		suppressAnimate(false)
-		if emoteTrack or emoteId then clearEmote() end
 	end
 end)
 
@@ -431,7 +467,7 @@ local function toggleFly()
 		shutdown()
 	else
 		if state.mode == "air" then startAirWalk() else startFly() end
-		if state.flying and state.emote then installEmote() adoptEmote() end
+		if state.flying then installEmote() adoptEmote() end
 	end
 end
 
@@ -681,19 +717,16 @@ do
 end
 stepper(pages.FLY, "Fly speed", function() return state.flySpeed end,
 	1, 1, 20, function(v) state.flySpeed = v end, function() state.flySpeed = 5 end)
-toggleRow(pages.FLY, "Keep emote while moving", function() return state.emote end, function()
-	state.emote = not state.emote
-	if state.emote then
-		if state.flying then installEmote() adoptEmote() end
-	else
-		restoreAnimate()
-	end
-end)
+do
+	local r = row(pages.FLY)
+	local b = button(r, "Stop emote", UDim2.fromScale(1, 1), UDim2.new())
+	b.MouseButton1Click:Connect(function() clearEmote() end)
+end
 toggleRow(pages.FLY, "Override joystick", function() return state.override end,
 	function() state.override = not state.override end)
 toggleRow(pages.FLY, "Show D-Pad", function() return state.showPad end,
 	function() state.showPad = not state.showPad end)
-note(pages.FLY, "Override (AirWalk): joystick/WASD/D-Pad move you manually at Walk speed, so emotes never reset. F = toggle flight.", 28)
+note(pages.FLY, "Flight / Override / D-Pad on = emote stays. Override & D-Pad move you manually. F = flight.", 28)
 
 -- PLAYERS page (teleports only YOUR character to the target)
 local list = Instance.new("ScrollingFrame")
@@ -747,7 +780,7 @@ local function teleportTo(target)
 	root.AssemblyLinearVelocity = Vector3.zero
 	if wasAir then
 		startAirWalk()
-		if state.emote then installEmote() end
+		installEmote()
 	end
 	lblSel.Text = "Teleported to " .. target.Name
 end
@@ -826,6 +859,7 @@ end)
 -- close
 btnClose.MouseButton1Click:Connect(function()
 	state.override = false
+	state.showPad = false
 	shutdown()
 	resetWalk()
 	resetJump()
