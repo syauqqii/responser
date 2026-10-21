@@ -1,3 +1,7 @@
+-- Movement Hub (UNIVERSAL: client-side, works in any game)
+-- Features: Fly/AirWalk, Walk Speed, Jump Power, Infinite Jump, persistent Emote while moving, Teleport to player
+-- Hotkeys: F = toggle flight | E = up | Q = down
+
 local Players    = game:GetService("Players")
 local RunService = game:GetService("RunService")
 local UIS        = game:GetService("UserInputService")
@@ -147,7 +151,7 @@ local function startFly()
 end
 
 ----------------------------------------------------------------
--- WALK SPEED + JUMP (dipaksa tiap frame supaya tidak di-reset game)
+-- WALK SPEED + JUMP (enforced every frame so the game can't reset them)
 ----------------------------------------------------------------
 local capturedHum
 local function readJumpPower(h)
@@ -155,7 +159,7 @@ local function readJumpPower(h)
 end
 
 local function applyStats(h)
-	if h ~= capturedHum then -- ambil nilai asli game sebelum dioverride
+	if h ~= capturedHum then -- capture the game's original values before overriding
 		capturedHum = h
 		defaults.ws = h.WalkSpeed
 		defaults.jump = readJumpPower(h)
@@ -201,12 +205,34 @@ bind(UIS.JumpRequest, function()
 end)
 
 ----------------------------------------------------------------
--- EMOTE (tetap berjalan saat bergerak jika "Emote" aktif)
+-- EMOTE (stays active while moving when "Keep emote" is on)
+-- Same idea as the Up/Down case: the emote must not depend on the
+-- default Animate script. While an emote is held we (1) disable Animate,
+-- (2) kill its low-priority walk/idle tracks, (3) replay the emote
+-- instantly if anything stops it.
 ----------------------------------------------------------------
-local emoteTrack, animateOverridden = nil, false
+local emoteTrack, emoteId, emotePos = nil, nil, 0
+local animateOverridden, animateSuppressed = false, false
 
 local function stopEmote()
 	if emoteTrack then pcall(function() emoteTrack:Stop() end) emoteTrack = nil end
+end
+
+local function clearEmote()
+	emoteId, emotePos = nil, 0
+	stopEmote()
+end
+
+local function suppressAnimate(on)
+	if on == animateSuppressed then return end
+	animateSuppressed = on
+	local animate = player.Character and player.Character:FindFirstChild("Animate")
+	if not animate then return end
+	if on then
+		animate.Disabled = true
+	elseif not flyDisabled then
+		animate.Disabled = false
+	end
 end
 
 local function findEmoteId(hum, name)
@@ -242,8 +268,8 @@ local function playEmoteById(hum, id, startPos)
 	track.Priority = Enum.AnimationPriority.Action4
 	track.Looped = true
 	track:Play()
-	if startPos then track.TimePosition = startPos end
-	emoteTrack = track
+	if startPos and startPos > 0 then pcall(function() track.TimePosition = startPos end) end
+	emoteTrack, emoteId = track, id
 	return true
 end
 
@@ -252,9 +278,11 @@ local function playEmote(name)
 	if not hum then return false end
 	local id = findEmoteId(hum, tostring(name))
 	if not id then return false end
+	emotePos = 0
 	return playEmoteById(hum, id)
 end
 
+-- If an emote is already playing when the option is enabled, take it over
 local function adoptEmote()
 	local hum = getParts()
 	if not hum then return end
@@ -297,7 +325,8 @@ local function installEmote()
 end
 
 local function restoreAnimate()
-	stopEmote()
+	clearEmote()
+	suppressAnimate(false)
 	if not animateOverridden then return end
 	animateOverridden = false
 	if flyDisabled then return end
@@ -312,10 +341,29 @@ local function restoreAnimate()
 end
 
 bind(RunService.Heartbeat, function()
-	if not emoteTrack then return end
 	local h = getParts()
-	local moving = h and (h.MoveDirection.Magnitude > 0 or state.up or state.down)
-	if (moving and not state.emote) or not emoteTrack.IsPlaying then stopEmote() end
+	if not h then return end
+	if state.emote and state.flying and emoteId then
+		suppressAnimate(true)
+		-- replay instantly if something stopped the emote
+		if not (emoteTrack and emoteTrack.IsPlaying) then
+			playEmoteById(h, emoteId, emotePos)
+		end
+		if emoteTrack then emotePos = emoteTrack.TimePosition end
+		-- keep walk/idle animations from fighting the emote
+		for _, t in ipairs(h:GetPlayingAnimationTracks()) do
+			if t ~= emoteTrack then
+				local p = t.Priority
+				if p == Enum.AnimationPriority.Core or p == Enum.AnimationPriority.Idle
+					or p == Enum.AnimationPriority.Movement then
+					t:Stop(0)
+				end
+			end
+		end
+	else
+		suppressAnimate(false)
+		if emoteTrack or emoteId then clearEmote() end
+	end
 end)
 
 ----------------------------------------------------------------
@@ -338,7 +386,8 @@ end
 bind(player.CharacterAdded, function()
 	flyDisabled = false
 	animateOverridden = false
-	emoteTrack = nil
+	animateSuppressed = false
+	emoteTrack, emoteId, emotePos = nil, nil, 0
 	stopFly()
 	state.up, state.down = false, false
 end)
@@ -425,7 +474,7 @@ local btnMin   = button(header, "–", UDim2.fromOffset(22, 20), UDim2.new(1, -5
 local btnClose = button(header, "×", UDim2.fromOffset(22, 20), UDim2.new(1, -26, 0, 5))
 
 -- tabs
-local tabNames = { "GERAK", "TERBANG", "PLAYER" }
+local tabNames = { "MOVE", "FLY", "PLAYERS" }
 local tabs, pages = {}, {}
 for i, name in ipairs(tabNames) do
 	tabs[name] = button(panel, name, UDim2.fromOffset(66, 22), UDim2.fromOffset(8 + (i - 1) * 71, 32))
@@ -447,7 +496,7 @@ local function newPage(layout)
 	end
 	return f
 end
-pages.GERAK, pages.TERBANG, pages.PLAYER = newPage(true), newPage(true), newPage(false)
+pages.MOVE, pages.FLY, pages.PLAYERS = newPage(true), newPage(true), newPage(false)
 
 local order = 0
 local function row(parent)
@@ -502,22 +551,22 @@ local function note(parent, text, height)
 	return l
 end
 
--- Page GERAK
-stepper(pages.GERAK, "Walk", function() return state.ws or defaults.ws end,
+-- MOVE page
+stepper(pages.MOVE, "Walk", function() return state.ws or defaults.ws end,
 	4, 4, 200, function(v) state.ws = v end, resetWalk)
-stepper(pages.GERAK, "Jump", function() return state.jump or defaults.jump end,
+stepper(pages.MOVE, "Jump", function() return state.jump or defaults.jump end,
 	10, 10, 300, function(v) state.jump = v end, resetJump)
-toggleRow(pages.GERAK, "Infinite Jump", function() return state.infJump end,
+toggleRow(pages.MOVE, "Infinite Jump", function() return state.infJump end,
 	function() state.infJump = not state.infJump end)
-note(pages.GERAK, "Infinite Jump: tekan Jump berkali-kali di udara untuk lompat terus. R = kembali ke nilai asli game.", 42)
+note(pages.MOVE, "Infinite Jump: tap Jump repeatedly in mid-air to keep jumping. R = restore the game's original value.", 42)
 
--- Page TERBANG
-toggleRow(pages.TERBANG, "Terbang", function() return state.flying end, toggleFly)
+-- FLY page
+toggleRow(pages.FLY, "Flight", function() return state.flying end, toggleFly)
 do
-	local r = row(pages.TERBANG)
+	local r = row(pages.FLY)
 	local b = button(r, "", UDim2.fromScale(1, 1), UDim2.new())
 	reg(function()
-		b.Text = state.mode == "air" and "Mode: AirWalk (jalan di udara)" or "Mode: Fly (bebas)"
+		b.Text = state.mode == "air" and "Mode: AirWalk (walk on air)" or "Mode: Fly (free flight)"
 	end)
 	b.MouseButton1Click:Connect(function()
 		shutdown()
@@ -525,9 +574,9 @@ do
 		refresh()
 	end)
 end
-stepper(pages.TERBANG, "Fly spd", function() return state.flySpeed end,
+stepper(pages.FLY, "Fly speed", function() return state.flySpeed end,
 	1, 1, 20, function(v) state.flySpeed = v end, function() state.flySpeed = 5 end)
-toggleRow(pages.TERBANG, "Emote tetap jalan saat gerak", function() return state.emote end, function()
+toggleRow(pages.FLY, "Keep emote while moving", function() return state.emote end, function()
 	state.emote = not state.emote
 	if state.emote then
 		if state.flying then installEmote() adoptEmote() end
@@ -536,9 +585,9 @@ toggleRow(pages.TERBANG, "Emote tetap jalan saat gerak", function() return state
 	end
 end)
 do
-	local r = row(pages.TERBANG)
-	local up   = button(r, "▲ Naik (E)", UDim2.new(0.5, -3, 1, 0), UDim2.new())
-	local down = button(r, "▼ Turun (Q)", UDim2.new(0.5, -3, 1, 0), UDim2.new(0.5, 3, 0, 0))
+	local r = row(pages.FLY)
+	local up   = button(r, "▲ Up (E)", UDim2.new(0.5, -3, 1, 0), UDim2.new())
+	local down = button(r, "▼ Down (Q)", UDim2.new(0.5, -3, 1, 0), UDim2.new(0.5, 3, 0, 0))
 	local function hold(btn, key)
 		btn.InputBegan:Connect(function(i)
 			if i.UserInputType == Enum.UserInputType.MouseButton1 or i.UserInputType == Enum.UserInputType.Touch then
@@ -554,9 +603,9 @@ do
 	hold(up, "up")
 	hold(down, "down")
 end
-note(pages.TERBANG, "Hotkey: F = on/off terbang.", 14)
+note(pages.FLY, "F = toggle flight. Start an emote while Flight + Keep emote are on. Turn Keep emote off to cancel it.", 26)
 
--- Page PLAYER (teleport ke diri sendiri -> target)
+-- PLAYERS page (teleports only YOUR character to the target)
 local list = Instance.new("ScrollingFrame")
 list.Size = UDim2.new(1, 0, 0, 110)
 list.BackgroundColor3 = WHITE
@@ -565,15 +614,15 @@ list.BorderSizePixel = 0
 list.ScrollBarThickness = 3
 list.CanvasSize = UDim2.new()
 list.AutomaticCanvasSize = Enum.AutomaticSize.Y
-list.Parent = pages.PLAYER
+list.Parent = pages.PLAYERS
 corner(list, 6)
 local ll = Instance.new("UIListLayout")
 ll.Padding = UDim.new(0, 2)
 ll.Parent = list
 
-local btnTp  = button(pages.PLAYER, "TELEPORT", UDim2.new(1, -56, 0, 28), UDim2.fromOffset(0, 118))
-local btnRef = button(pages.PLAYER, "⟳", UDim2.fromOffset(50, 28), UDim2.new(1, -50, 0, 118))
-local lblSel = label(pages.PLAYER, "Pilih player dulu", UDim2.new(1, 0, 0, 24), UDim2.fromOffset(0, 152), 11)
+local btnTp  = button(pages.PLAYERS, "TELEPORT", UDim2.new(1, -56, 0, 28), UDim2.fromOffset(0, 118))
+local btnRef = button(pages.PLAYERS, "⟳", UDim2.fromOffset(50, 28), UDim2.new(1, -50, 0, 118))
+local lblSel = label(pages.PLAYERS, "Select a player first", UDim2.new(1, 0, 0, 24), UDim2.fromOffset(0, 152), 11)
 lblSel.TextTruncate = Enum.TextTruncate.AtEnd
 
 local selected
@@ -591,7 +640,7 @@ local function renderPlayers()
 			b.BackgroundTransparency = selected == p and 0.55 or 0.9
 			b.MouseButton1Click:Connect(function()
 				selected = p
-				lblSel.Text = "Dipilih: " .. p.Name
+				lblSel.Text = "Selected: " .. p.Name
 				renderPlayers()
 			end)
 		end
@@ -602,7 +651,7 @@ local function teleportTo(target)
 	local _, root = getParts()
 	local tc = target and target.Character
 	local troot = tc and tc:FindFirstChild("HumanoidRootPart")
-	if not (root and troot) then lblSel.Text = "Player tidak ditemukan" return end
+	if not (root and troot) then lblSel.Text = "Player not found" return end
 	local wasAir = state.flying and state.mode == "air"
 	root.CFrame = troot.CFrame * CFrame.new(0, 0, 3)
 	root.AssemblyLinearVelocity = Vector3.zero
@@ -610,21 +659,21 @@ local function teleportTo(target)
 		startAirWalk()
 		if state.emote then installEmote() end
 	end
-	lblSel.Text = "Teleport ke " .. target.Name
+	lblSel.Text = "Teleported to " .. target.Name
 end
 
 btnTp.MouseButton1Click:Connect(function()
-	if selected then teleportTo(selected) else lblSel.Text = "Pilih player dulu" end
+	if selected then teleportTo(selected) else lblSel.Text = "Select a player first" end
 end)
 btnRef.MouseButton1Click:Connect(renderPlayers)
 bind(Players.PlayerAdded, function() renderPlayers() end)
 bind(Players.PlayerRemoving, function(p)
-	if selected == p then selected = nil lblSel.Text = "Pilih player dulu" end
+	if selected == p then selected = nil lblSel.Text = "Select a player first" end
 	task.defer(renderPlayers)
 end)
 
--- footer info universal
-local footer = label(panel, "🌐 Universal: jalan di game apa pun (client-side). Game dengan anti-cheat / server check bisa mereset nilai.",
+-- footer info
+local footer = label(panel, "🌐 Universal: works in any game (client-side). Games with anti-cheat or server checks may reset values.",
 	UDim2.new(1, -16, 0, 34), UDim2.new(0, 8, 1, -38), 9)
 footer.TextWrapped = true
 footer.TextYAlignment = Enum.TextYAlignment.Top
@@ -637,12 +686,12 @@ local function showTab(name)
 		tabs[n].BackgroundColor3 = n == name and ACCENT or WHITE
 		tabs[n].BackgroundTransparency = n == name and 0.55 or 0.9
 	end
-	if name == "PLAYER" then renderPlayers() end
+	if name == "PLAYERS" then renderPlayers() end
 end
 for name, b in pairs(tabs) do
 	b.MouseButton1Click:Connect(function() showTab(name) end)
 end
-showTab("GERAK")
+showTab("MOVE")
 
 -- minimize
 local mini = Instance.new("TextButton")
