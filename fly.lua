@@ -1,8 +1,3 @@
--- Universal GUI: Fly / AirWalk / WalkSpeed / Allow emote / Teleport ke player | R6/R15, PC + mobile
--- MODE AIRWALK (default): jalan & lompat normal di atas void (lantai transparan di bawah kaki)
--- MODE FLY: melayang, gerak mengikuti kamera
--- Keyboard: F toggle, E naik, Q turun
-
 local Players    = game:GetService("Players")
 local RunService = game:GetService("RunService")
 local UIS        = game:GetService("UserInputService")
@@ -10,15 +5,13 @@ local UIS        = game:GetService("UserInputService")
 local player = Players.LocalPlayer
 local camera = workspace.CurrentCamera
 
--- cleanup instance lama
 local old = player.PlayerGui:FindFirstChild("FlyGUI")
 if old then old:Destroy() end
 
--- ========== STATE ==========
-local state = { flying = false, speed = 5, up = false, down = false, mode = "air" } -- "air" = jalan normal di udara, "fly" = terbang
+local state = { flying = false, speed = 5, up = false, down = false, mode = "air" }
 local MIN_SPEED, MAX_SPEED, SPEED_MULT = 1, 20, 10
 local bv, bg, conn, platform
-local flyDisabled = false -- true saat mode FLY sedang mematikan state/Animate humanoid
+local flyDisabled = false
 
 local FLY_STATES = {
 	"Climbing", "FallingDown", "Flying", "Freefall", "GettingUp", "Jumping", "Landed", "Physics",
@@ -30,7 +23,6 @@ local function setStates(hum, enabled)
 	end
 end
 
--- ========== FLY CORE ==========
 local function getParts()
 	local char = player.Character
 	local hum  = char and char:FindFirstChildOfClass("Humanoid")
@@ -46,7 +38,7 @@ local function stopFly()
 	if platform then platform:Destroy() platform = nil end
 	local hum = getParts()
 	if hum then hum.PlatformStand = false end
-	if flyDisabled then -- pulihkan humanoid setelah mode FLY (sama seperti script asli)
+	if flyDisabled then
 		flyDisabled = false
 		if hum then
 			setStates(hum, true)
@@ -57,7 +49,6 @@ local function stopFly()
 	end
 end
 
--- AIR WALK: lantai transparan di bawah kaki, ikut X/Z karakter. Jalan/lompat tetap normal.
 local function startAirWalk()
 	local hum, root = getParts()
 	if not (hum and root) then return end
@@ -65,7 +56,7 @@ local function startAirWalk()
 	state.flying = true
 
 	local box, size = player.Character:GetBoundingBox()
-	local level = box.Position.Y - size.Y / 2 -- tinggi telapak kaki
+	local level = box.Position.Y - size.Y / 2
 
 	platform = Instance.new("Part")
 	platform.Size = Vector3.new(10, 1, 10)
@@ -90,7 +81,6 @@ local function startFly()
 	state.flying = true
 	flyDisabled = true
 
-	-- logika sama dengan script asli: matikan Animate + semua state, beku-kan animasi, lalu melayang
 	local char = player.Character
 	local animate = char:FindFirstChild("Animate")
 	if animate then animate.Disabled = true end
@@ -99,7 +89,7 @@ local function startFly()
 	hum:ChangeState(Enum.HumanoidStateType.Swimming)
 	hum.PlatformStand = true
 
-	bv = Instance.new("BodyVelocity") -- velocity 0 = menahan karakter di udara (hover)
+	bv = Instance.new("BodyVelocity")
 	bv.MaxForce = Vector3.one * 9e9
 	bv.Velocity = Vector3.new(0, 0.1, 0)
 	bv.Parent = root
@@ -114,7 +104,6 @@ local function startFly()
 		local h, r = getParts()
 		if not (h and r and h.Health > 0) then return stopFly() end
 
-		-- arah gerak: MoveDirection (joystick/WASD); fallback baca tombol langsung
 		local dir = h.MoveDirection
 		if dir.Magnitude == 0 and not UIS:GetFocusedTextBox() then
 			local cf = camera.CFrame
@@ -142,7 +131,6 @@ local function startFly()
 	end)
 end
 
--- ========== WALKSPEED ==========
 local defaultWS = (getParts() and getParts().WalkSpeed) or 16
 local WS_MIN, WS_MAX, WS_STEP = 2, 150, 2
 local wsConn = RunService.Heartbeat:Connect(function()
@@ -161,9 +149,6 @@ local function resetWS()
 	if h then h.WalkSpeed = defaultWS end
 end
 
--- ========== ALLOW EMOTE ==========
--- Animate bawaan hanya mau emote saat karakter "Standing". Saat fly/airwalk kita ganti handler
--- emote-nya (BindableFunction "PlayEmote") dengan pemutar emote sendiri.
 state.emote = false
 local emoteTrack, animateOverridden = nil, false
 
@@ -202,8 +187,8 @@ local function playEmoteById(hum, id, startPos)
 	local animator = hum:FindFirstChildOfClass("Animator") or hum
 	local ok, track = pcall(function() return animator:LoadAnimation(anim) end)
 	if not ok or not track then return false end
-	track.Priority = Enum.AnimationPriority.Action4 -- di atas animasi jalan
-	track.Looped = true -- terus main selama bergerak
+	track.Priority = Enum.AnimationPriority.Action4
+	track.Looped = true
 	track:Play()
 	if startPos then track.TimePosition = startPos end
 	emoteTrack = track
@@ -218,9 +203,6 @@ local function playEmote(name)
 	return playEmoteById(hum, id)
 end
 
--- Ambil alih emote yang SEDANG jalan (dimulai sebelum fitur ON): hentikan track asli milik Animate
--- (yang akan di-stop Animate begitu karakter bergerak) lalu lanjutkan dari posisi yang sama
--- dengan track milik kita sendiri, supaya tidak ikut berhenti saat jalan.
 local function adoptEmote()
 	local hum = getParts()
 	if not hum then return end
@@ -263,11 +245,11 @@ local function installEmote()
 	end
 end
 
-local function restoreAnimate() -- jalankan ulang Animate supaya handler aslinya kembali
+local function restoreAnimate()
 	stopEmote()
 	if not animateOverridden then return end
 	animateOverridden = false
-	if flyDisabled then return end -- sedang fly: stopFly yang akan menyalakan Animate lagi
+	if flyDisabled then return end
 	local animate = player.Character and player.Character:FindFirstChild("Animate")
 	if animate then
 		task.spawn(function()
@@ -278,16 +260,15 @@ local function restoreAnimate() -- jalankan ulang Animate supaya handler aslinya
 	end
 end
 
--- emote berhenti kalau karakter bergerak
 local emoteConn = RunService.Heartbeat:Connect(function()
 	if not emoteTrack then return end
 	local h = getParts()
-	-- centang aktif = emote tetap jalan walau bergerak (berhenti hanya kalau emote lain / fly dimatikan / centang dilepas)
+
 	local moving = h and (h.MoveDirection.Magnitude > 0 or state.up or state.down)
 	if (moving and not state.emote) or not emoteTrack.IsPlaying then stopEmote() end
 end)
 
-local function shutdown() -- matikan fly/airwalk + pulihkan emote bawaan
+local function shutdown()
 	stopFly()
 	restoreAnimate()
 end
@@ -302,12 +283,11 @@ local function toggleFly()
 end
 
 player.CharacterAdded:Connect(function()
-	flyDisabled = false -- karakter baru sudah bersih
+	flyDisabled = false
 	stopFly()
 	state.up, state.down = false, false
 end)
 
--- ========== GUI ==========
 local gui = Instance.new("ScreenGui")
 gui.Name = "FlyGUI"
 gui.ResetOnSpawn = false
@@ -339,7 +319,6 @@ local function button(parent, text, size, pos)
 	return b
 end
 
--- Panel utama
 local panel = Instance.new("Frame")
 panel.Name = "Panel"
 panel.Size = UDim2.fromOffset(170, 186)
@@ -355,7 +334,6 @@ stroke.Color = Color3.new(1, 1, 1)
 stroke.Transparency = 0.85
 stroke.Parent = panel
 
--- Header (drag handle)
 local header = Instance.new("TextLabel")
 header.Size = UDim2.new(1, -56, 0, 24)
 header.Position = UDim2.fromOffset(10, 2)
@@ -370,12 +348,10 @@ header.Parent = panel
 local btnMin   = button(panel, "–", UDim2.fromOffset(22, 20), UDim2.new(1, -50, 0, 4))
 local btnClose = button(panel, "×", UDim2.fromOffset(22, 20), UDim2.new(1, -26, 0, 4))
 
--- Baris 1: FLY | UP | DOWN
 local btnFly  = button(panel, "FLY: OFF", UDim2.fromOffset(70, 26), UDim2.fromOffset(8, 30))
 local btnUp   = button(panel, "▲", UDim2.fromOffset(40, 26), UDim2.fromOffset(82, 30))
 local btnDown = button(panel, "▼", UDim2.fromOffset(40, 26), UDim2.fromOffset(124, 30))
 
--- Baris 2: - | speed | +
 local btnSub = button(panel, "-", UDim2.fromOffset(40, 26), UDim2.fromOffset(8, 62))
 local lblSpd = Instance.new("TextLabel")
 lblSpd.Size = UDim2.fromOffset(70, 26)
@@ -389,10 +365,8 @@ lblSpd.Parent = panel
 local btnAdd = button(panel, "+", UDim2.fromOffset(40, 26), UDim2.fromOffset(122, 62))
 btnAdd.Size = UDim2.fromOffset(40, 26)
 
--- Baris 3: mode
 local btnMode = button(panel, "MODE: AIRWALK", UDim2.fromOffset(154, 26), UDim2.fromOffset(8, 94))
 
--- Baris 4: kecepatan jalan (WalkSpeed)
 local btnWsSub = button(panel, "-", UDim2.fromOffset(36, 26), UDim2.fromOffset(8, 124))
 local lblWs = Instance.new("TextLabel")
 lblWs.Size = UDim2.fromOffset(54, 26)
@@ -405,10 +379,8 @@ lblWs.Parent = panel
 local btnWsAdd = button(panel, "+", UDim2.fromOffset(36, 26), UDim2.fromOffset(102, 124))
 local btnWsRst = button(panel, "R", UDim2.fromOffset(22, 26), UDim2.fromOffset(140, 124))
 
--- Baris 5: centang allow emote
 local btnEmote = button(panel, "☐ Allow emote", UDim2.fromOffset(154, 26), UDim2.fromOffset(8, 154))
 
--- ========== TAB: MOVE | PLAYERS ==========
 header.Text = ""
 local tabMove    = button(panel, "MOVE", UDim2.fromOffset(52, 20), UDim2.fromOffset(8, 4))
 local tabPlayers = button(panel, "PLAYERS", UDim2.fromOffset(62, 20), UDim2.fromOffset(64, 4))
@@ -457,7 +429,7 @@ lblSel.TextColor3 = Color3.new(1, 1, 1)
 lblSel.TextTruncate = Enum.TextTruncate.AtEnd
 lblSel.Parent = pagePlayers
 
-local selected -- Player yang dipilih
+local selected
 local function renderPlayers()
 	for _, c in ipairs(list:GetChildren()) do
 		if c:IsA("TextButton") then c:Destroy() end
@@ -487,7 +459,7 @@ local function teleportTo(target)
 	local wasAir = state.flying and state.mode == "air"
 	root.CFrame = troot.CFrame * CFrame.new(0, 0, 3)
 	root.AssemblyLinearVelocity = Vector3.zero
-	if wasAir then -- lantai airwalk dihitung ulang di ketinggian baru
+	if wasAir then
 		startAirWalk()
 		if state.emote then installEmote() end
 	end
@@ -517,7 +489,6 @@ tabMove.MouseButton1Click:Connect(function() showTab("move") end)
 tabPlayers.MouseButton1Click:Connect(function() renderPlayers() showTab("players") end)
 showTab("move")
 
--- Tombol mini (saat minimize)
 local mini = Instance.new("TextButton")
 mini.Name = "Mini"
 mini.Size = UDim2.fromOffset(34, 34)
@@ -534,7 +505,6 @@ corner(mini, 17)
 local miniStroke = stroke:Clone()
 miniStroke.Parent = mini
 
--- ========== INTERAKSI ==========
 local function refresh()
 	btnFly.Text = state.flying and "FLY: ON" or "FLY: OFF"
 	btnFly.BackgroundColor3 = state.flying and ACCENT or Color3.new(1, 1, 1)
@@ -596,7 +566,6 @@ UIS.InputEnded:Connect(function(i)
 	elseif i.KeyCode == Enum.KeyCode.Q then state.down = false end
 end)
 
--- Minimize / restore (posisi mini ikut posisi panel)
 btnMin.MouseButton1Click:Connect(function()
 	mini.Position = panel.Position
 	panel.Visible = false
@@ -617,7 +586,6 @@ btnClose.MouseButton1Click:Connect(function()
 	gui:Destroy()
 end)
 
--- ========== DRAG (PC + mobile) ==========
 local function makeDraggable(handle, target)
 	local dragging, startPos, startInput
 	handle.InputBegan:Connect(function(i)
@@ -635,6 +603,7 @@ local function makeDraggable(handle, target)
 		end
 	end)
 end
+
 makeDraggable(header, panel)
 makeDraggable(panel, panel)
 makeDraggable(mini, mini)
