@@ -1,5 +1,6 @@
 -- Movement Hub (UNIVERSAL: client-side, works in any game)
--- Features: Fly/AirWalk, Walk Speed, Jump Power, Infinite Jump, persistent Emote while moving, Teleport to player
+-- Features: Fly/AirWalk, Walk Speed, Jump Power, Infinite Jump, emote-safe movement
+--           (joystick override + D-Pad), Teleport to player
 -- Hotkeys: F = toggle flight | E = up | Q = down
 
 local Players    = game:GetService("Players")
@@ -18,7 +19,9 @@ if old then old:Destroy() end
 local state = {
 	flying = false, mode = "air", flySpeed = 5, up = false, down = false,
 	ws = nil, jump = nil, infJump = false, emote = false,
+	override = false, showPad = false,
 }
+local pad = { f = false, b = false, l = false, r = false }
 local defaults = { ws = 16, jump = 50 }
 local conns = {}
 local function bind(signal, fn)
@@ -29,6 +32,7 @@ end
 
 local bv, bg, flyConn, platform
 local flyDisabled = false
+local wsZeroed = false
 
 local FLY_STATES = {
 	"Climbing", "FallingDown", "Flying", "Freefall", "GettingUp", "Jumping", "Landed", "Physics",
@@ -45,6 +49,24 @@ local function getParts()
 	local hum  = char and char:FindFirstChildOfClass("Humanoid")
 	local root = char and char:FindFirstChild("HumanoidRootPart")
 	return hum, root
+end
+
+-- Camera-relative direction from the D-Pad buttons
+local function padVector()
+	local x = (pad.r and 1 or 0) - (pad.l and 1 or 0)
+	local z = (pad.f and 1 or 0) - (pad.b and 1 or 0)
+	if x == 0 and z == 0 then return Vector3.zero end
+	local cf = camera.CFrame
+	local f  = Vector3.new(cf.LookVector.X, 0, cf.LookVector.Z)
+	local rt = Vector3.new(cf.RightVector.X, 0, cf.RightVector.Z)
+	if f.Magnitude == 0 or rt.Magnitude == 0 then return Vector3.zero end
+	local v = f.Unit * z + rt.Unit * x
+	return v.Magnitude > 0 and v.Unit or Vector3.zero
+end
+
+-- Joystick override only applies to AirWalk
+local function overrideActive()
+	return state.override and state.flying and state.mode == "air"
 end
 
 ----------------------------------------------------------------
@@ -89,6 +111,23 @@ local function startAirWalk()
 	flyConn = RunService.RenderStepped:Connect(function(dt)
 		local h, r = getParts()
 		if not (h and r and h.Health > 0) then return stopFly() end
+
+		-- Manual horizontal movement (D-Pad, or joystick/WASD when override is on).
+		-- The Humanoid itself never walks, so animations/emotes are never interrupted.
+		local dir = Vector3.zero
+		local pv = padVector()
+		if pv.Magnitude > 0 then
+			dir = pv
+		elseif state.override then
+			dir = h.MoveDirection
+		end
+		dir = Vector3.new(dir.X, 0, dir.Z)
+		if dir.Magnitude > 0 then
+			dir = dir.Unit
+			local pos = r.Position + dir * (state.ws or defaults.ws) * dt
+			r.CFrame = CFrame.lookAt(pos, pos + dir)
+		end
+
 		level += ((state.up and 1 or 0) - (state.down and 1 or 0)) * state.flySpeed * 5 * dt
 		platform.CFrame = CFrame.new(r.Position.X, level - 0.5, r.Position.Z)
 	end)
@@ -124,7 +163,10 @@ local function startFly()
 		if not (h and r and h.Health > 0) then return stopFly() end
 
 		local dir = h.MoveDirection
-		if dir.Magnitude == 0 and not UIS:GetFocusedTextBox() then
+		local pv = padVector()
+		if pv.Magnitude > 0 then
+			dir = pv
+		elseif dir.Magnitude == 0 and not UIS:GetFocusedTextBox() then
 			local cf = camera.CFrame
 			local f  = Vector3.new(cf.LookVector.X, 0, cf.LookVector.Z)
 			local rt = Vector3.new(cf.RightVector.X, 0, cf.RightVector.Z)
@@ -164,7 +206,19 @@ local function applyStats(h)
 		defaults.ws = h.WalkSpeed
 		defaults.jump = readJumpPower(h)
 	end
-	if state.ws and h.WalkSpeed ~= state.ws then h.WalkSpeed = state.ws end
+
+	if overrideActive() then
+		-- Humanoid must not walk by itself: we move the character manually
+		if h.WalkSpeed ~= 0 then h.WalkSpeed = 0 end
+		wsZeroed = true
+	else
+		if wsZeroed then
+			wsZeroed = false
+			h.WalkSpeed = state.ws or defaults.ws
+		end
+		if state.ws and h.WalkSpeed ~= state.ws then h.WalkSpeed = state.ws end
+	end
+
 	if state.jump then
 		if h.UseJumpPower then
 			if h.JumpPower ~= state.jump then h.JumpPower = state.jump end
@@ -183,7 +237,7 @@ end)
 local function resetWalk()
 	state.ws = nil
 	local h = getParts()
-	if h then h.WalkSpeed = defaults.ws end
+	if h and not overrideActive() then h.WalkSpeed = defaults.ws end
 end
 
 local function resetJump()
@@ -206,10 +260,8 @@ end)
 
 ----------------------------------------------------------------
 -- EMOTE (stays active while moving when "Keep emote" is on)
--- Same idea as the Up/Down case: the emote must not depend on the
--- default Animate script. While an emote is held we (1) disable Animate,
--- (2) kill its low-priority walk/idle tracks, (3) replay the emote
--- instantly if anything stops it.
+-- While an emote is held we (1) disable Animate, (2) kill its low-priority
+-- walk/idle tracks, (3) replay the emote instantly if anything stops it.
 ----------------------------------------------------------------
 local emoteTrack, emoteId, emotePos = nil, nil, 0
 local animateOverridden, animateSuppressed = false, false
@@ -387,9 +439,11 @@ bind(player.CharacterAdded, function()
 	flyDisabled = false
 	animateOverridden = false
 	animateSuppressed = false
+	wsZeroed = false
 	emoteTrack, emoteId, emotePos = nil, nil, 0
 	stopFly()
 	state.up, state.down = false, false
+	pad.f, pad.b, pad.l, pad.r = false, false, false, false
 end)
 
 ----------------------------------------------------------------
@@ -397,7 +451,8 @@ end)
 ----------------------------------------------------------------
 local ACCENT = Color3.fromRGB(110, 190, 255)
 local WHITE  = Color3.new(1, 1, 1)
-local PANEL_W, PANEL_H = 230, 300
+local DARK   = Color3.fromRGB(16, 16, 22)
+local PANEL_W, PANEL_H = 230, 336
 
 local gui = Instance.new("ScreenGui")
 gui.Name = "FlyGUI"
@@ -440,6 +495,20 @@ local function button(parent, text, size, pos)
 	return b
 end
 
+-- press-and-hold helper (mouse + touch)
+local function holdBtn(btn, set)
+	btn.InputBegan:Connect(function(i)
+		if i.UserInputType == Enum.UserInputType.MouseButton1 or i.UserInputType == Enum.UserInputType.Touch then
+			set(true)
+		end
+	end)
+	btn.InputEnded:Connect(function(i)
+		if i.UserInputType == Enum.UserInputType.MouseButton1 or i.UserInputType == Enum.UserInputType.Touch then
+			set(false)
+		end
+	end)
+end
+
 local refreshers = {}
 local function reg(fn) table.insert(refreshers, fn) fn() end
 local function refresh() for _, fn in ipairs(refreshers) do fn() end end
@@ -447,8 +516,8 @@ local function refresh() for _, fn in ipairs(refreshers) do fn() end end
 local panel = Instance.new("Frame")
 panel.Name = "Panel"
 panel.Size = UDim2.fromOffset(PANEL_W, PANEL_H)
-panel.Position = UDim2.fromScale(0.04, 0.35)
-panel.BackgroundColor3 = Color3.fromRGB(16, 16, 22)
+panel.Position = UDim2.fromScale(0.04, 0.3)
+panel.BackgroundColor3 = DARK
 panel.BackgroundTransparency = 0.82
 panel.BorderSizePixel = 0
 panel.Parent = gui
@@ -473,6 +542,42 @@ corner(badge, 8)
 local btnMin   = button(header, "–", UDim2.fromOffset(22, 20), UDim2.new(1, -50, 0, 5))
 local btnClose = button(header, "×", UDim2.fromOffset(22, 20), UDim2.new(1, -26, 0, 5))
 
+-- D-Pad (separate floating, draggable window)
+local dpad = Instance.new("Frame")
+dpad.Name = "DPad"
+dpad.Size = UDim2.fromOffset(196, 172)
+dpad.Position = UDim2.new(1, -216, 1, -200)
+dpad.BackgroundColor3 = DARK
+dpad.BackgroundTransparency = 0.82
+dpad.BorderSizePixel = 0
+dpad.Visible = false
+dpad.Parent = gui
+corner(dpad, 12)
+local dpStroke = stroke:Clone()
+dpStroke.Parent = dpad
+
+local dpadHandle = Instance.new("Frame")
+dpadHandle.Size = UDim2.new(1, 0, 0, 20)
+dpadHandle.BackgroundTransparency = 1
+dpadHandle.Parent = dpad
+local dpTitle = label(dpadHandle, "D-PAD  (drag here)", UDim2.fromScale(1, 1), UDim2.new(), 9, Enum.Font.GothamBold)
+dpTitle.TextXAlignment = Enum.TextXAlignment.Center
+dpTitle.TextTransparency = 0.4
+
+local function padBtn(text, x, y, w, h, set, textSize)
+	local b = button(dpad, text, UDim2.fromOffset(w, h), UDim2.fromOffset(x, y))
+	b.TextSize = textSize or 16
+	holdBtn(b, set)
+	return b
+end
+padBtn("▲", 56, 24, 44, 44, function(v) pad.f = v end)
+padBtn("◀", 8, 72, 44, 44, function(v) pad.l = v end)
+padBtn("▶", 104, 72, 44, 44, function(v) pad.r = v end)
+padBtn("▼", 56, 120, 44, 44, function(v) pad.b = v end)
+padBtn("UP", 152, 24, 36, 68, function(v) state.up = v end, 11)
+padBtn("DN", 152, 96, 36, 68, function(v) state.down = v end, 11)
+reg(function() dpad.Visible = state.showPad end)
+
 -- tabs
 local tabNames = { "MOVE", "FLY", "PLAYERS" }
 local tabs, pages = {}, {}
@@ -483,7 +588,7 @@ end
 
 local function newPage(layout)
 	local f = Instance.new("Frame")
-	f.Size = UDim2.new(1, -16, 0, 196)
+	f.Size = UDim2.new(1, -16, 0, 232)
 	f.Position = UDim2.fromOffset(8, 60)
 	f.BackgroundTransparency = 1
 	f.Visible = false
@@ -528,9 +633,9 @@ local function toggleRow(parent, text, get, onClick)
 	local r = row(parent)
 	local b = button(r, "", UDim2.fromScale(1, 1), UDim2.new())
 	b.TextXAlignment = Enum.TextXAlignment.Left
-	local pad = Instance.new("UIPadding")
-	pad.PaddingLeft = UDim.new(0, 10)
-	pad.Parent = b
+	local pad_ = Instance.new("UIPadding")
+	pad_.PaddingLeft = UDim.new(0, 10)
+	pad_.Parent = b
 	reg(function()
 		local on = get()
 		b.Text = (on and "●  " or "○  ") .. text
@@ -584,26 +689,11 @@ toggleRow(pages.FLY, "Keep emote while moving", function() return state.emote en
 		restoreAnimate()
 	end
 end)
-do
-	local r = row(pages.FLY)
-	local up   = button(r, "▲ Up (E)", UDim2.new(0.5, -3, 1, 0), UDim2.new())
-	local down = button(r, "▼ Down (Q)", UDim2.new(0.5, -3, 1, 0), UDim2.new(0.5, 3, 0, 0))
-	local function hold(btn, key)
-		btn.InputBegan:Connect(function(i)
-			if i.UserInputType == Enum.UserInputType.MouseButton1 or i.UserInputType == Enum.UserInputType.Touch then
-				state[key] = true
-			end
-		end)
-		btn.InputEnded:Connect(function(i)
-			if i.UserInputType == Enum.UserInputType.MouseButton1 or i.UserInputType == Enum.UserInputType.Touch then
-				state[key] = false
-			end
-		end)
-	end
-	hold(up, "up")
-	hold(down, "down")
-end
-note(pages.FLY, "F = toggle flight. Start an emote while Flight + Keep emote are on. Turn Keep emote off to cancel it.", 26)
+toggleRow(pages.FLY, "Override joystick", function() return state.override end,
+	function() state.override = not state.override end)
+toggleRow(pages.FLY, "Show D-Pad", function() return state.showPad end,
+	function() state.showPad = not state.showPad end)
+note(pages.FLY, "Override (AirWalk): joystick/WASD/D-Pad move you manually at Walk speed, so emotes never reset. F = toggle flight.", 28)
 
 -- PLAYERS page (teleports only YOUR character to the target)
 local list = Instance.new("ScrollingFrame")
@@ -696,7 +786,7 @@ showTab("MOVE")
 -- minimize
 local mini = Instance.new("TextButton")
 mini.Size = UDim2.fromOffset(34, 34)
-mini.BackgroundColor3 = Color3.fromRGB(16, 16, 22)
+mini.BackgroundColor3 = DARK
 mini.BackgroundTransparency = 0.45
 mini.BorderSizePixel = 0
 mini.Text = "✈"
@@ -735,6 +825,7 @@ end)
 
 -- close
 btnClose.MouseButton1Click:Connect(function()
+	state.override = false
 	shutdown()
 	resetWalk()
 	resetJump()
@@ -742,7 +833,7 @@ btnClose.MouseButton1Click:Connect(function()
 	gui:Destroy()
 end)
 
--- drag (header + mini)
+-- drag (header, D-Pad handle, mini)
 local function makeDraggable(handle, target)
 	local dragging, startPos, startInput
 	handle.InputBegan:Connect(function(i)
@@ -761,6 +852,7 @@ local function makeDraggable(handle, target)
 	end)
 end
 makeDraggable(header, panel)
+makeDraggable(dpadHandle, dpad)
 makeDraggable(mini, mini)
 
 refresh()
